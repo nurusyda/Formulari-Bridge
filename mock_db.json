@@ -1,0 +1,959 @@
+{
+  "drugs": [
+    {
+      "drug_id": "rx-amox-500",
+      "medication_name": "Amoxicillin 500mg Capsule",
+      "ndc_code": "0093-3107-01",
+      "clinical_class": "Penicillin Antibiotic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-12T08:15:00Z",
+        "stock_history_24h": [48, 45, 40, 32, 18, 8, 0],
+        "expiration_date": "2027-06-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 12,
+        "estimated_wait_time": "45 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-ceph-500",
+          "medication_name": "Cephalexin 500mg Capsule",
+          "clinical_class": "First-Gen Cephalosporin",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 400,
+          "estimated_wait_time": "15 minutes",
+          "therapeutic_notes": "First-line substitute for most Amoxicillin indications. Cross-reactivity risk ~1-2% in documented penicillin allergy — elevated risk if anaphylaxis history."
+        },
+        {
+          "drug_id": "rx-azith-250",
+          "medication_name": "Azithromycin 250mg Tablet",
+          "clinical_class": "Macrolide Antibiotic",
+          "te_code": "AB",
+          "relative_cost": "higher",
+          "current_stock": 200,
+          "estimated_wait_time": "12 minutes",
+          "therapeutic_notes": "Broader spectrum. Appropriate if penicillin/cephalosporin allergy confirmed. Check QT prolongation risk and CYP3A4 interactions (warfarin, statins)."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-ceph-500",
+      "medication_name": "Cephalexin 500mg Capsule",
+      "ndc_code": "0093-3055-01",
+      "clinical_class": "First-Gen Cephalosporin",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 400,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-12T09:00:00Z",
+        "stock_history_24h": [420, 415, 410, 408, 405, 402, 400],
+        "expiration_date": "2027-09-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 4,
+        "estimated_wait_time": "15 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-azith-250",
+          "medication_name": "Azithromycin 250mg Tablet",
+          "clinical_class": "Macrolide Antibiotic",
+          "te_code": "AB",
+          "relative_cost": "higher",
+          "current_stock": 200,
+          "estimated_wait_time": "12 minutes",
+          "therapeutic_notes": "Use if cephalosporin allergy or failure. Monitor QT interval and drug interactions."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-azith-250",
+      "medication_name": "Azithromycin 250mg Tablet",
+      "ndc_code": "0069-3060-75",
+      "clinical_class": "Macrolide Antibiotic",
+      "formulary_tier": 2,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 200,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T07:30:00Z",
+        "stock_history_24h": [220, 218, 215, 212, 208, 204, 200],
+        "expiration_date": "2027-03-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 3,
+        "estimated_wait_time": "12 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-doxy-100",
+          "medication_name": "Doxycycline 100mg Capsule",
+          "clinical_class": "Tetracycline Antibiotic",
+          "te_code": "AB",
+          "relative_cost": "lower",
+          "current_stock": 180,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Alternative macrolide substitute. Avoid in pregnancy and children under 8. Check photosensitivity risk."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-doxy-100",
+      "medication_name": "Doxycycline 100mg Capsule",
+      "ndc_code": "0143-3106-01",
+      "clinical_class": "Tetracycline Antibiotic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 180,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T08:45:00Z",
+        "stock_history_24h": [195, 192, 190, 188, 185, 182, 180],
+        "expiration_date": "2027-11-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-metf-500",
+      "medication_name": "Metformin 500mg Tablet",
+      "ndc_code": "0093-1048-01",
+      "clinical_class": "Biguanide Antidiabetic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_3",
+        "last_drawer_open": "2026-04-12T06:00:00Z",
+        "stock_history_24h": [80, 70, 55, 40, 25, 10, 0],
+        "expiration_date": "2027-08-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 8,
+        "estimated_wait_time": "35 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-metf-1000",
+          "medication_name": "Metformin 1000mg Tablet",
+          "clinical_class": "Biguanide Antidiabetic",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 250,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Same drug, higher dose tablet. Can be split or dose adjusted. Confirm prescriber intent on dosing frequency."
+        },
+        {
+          "drug_id": "rx-glip-5",
+          "medication_name": "Glipizide 5mg Tablet",
+          "clinical_class": "Sulfonylurea Antidiabetic",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 320,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Different mechanism. Use if metformin contraindicated (eGFR < 30) or not tolerated. Hypoglycemia risk — counsel patient."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-metf-1000",
+      "medication_name": "Metformin 1000mg Tablet",
+      "ndc_code": "0093-1049-01",
+      "clinical_class": "Biguanide Antidiabetic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 250,
+        "machine_location": "OP_Pyxis_Station_3",
+        "last_drawer_open": "2026-04-12T09:10:00Z",
+        "stock_history_24h": [260, 258, 256, 254, 252, 251, 250],
+        "expiration_date": "2027-10-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-glip-5",
+      "medication_name": "Glipizide 5mg Tablet",
+      "ndc_code": "0049-1560-66",
+      "clinical_class": "Sulfonylurea Antidiabetic",
+      "formulary_tier": 2,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 320,
+        "machine_location": "OP_Pyxis_Station_3",
+        "last_drawer_open": "2026-04-11T14:00:00Z",
+        "stock_history_24h": [325, 324, 323, 322, 322, 321, 320],
+        "expiration_date": "2028-01-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-lisi-10",
+      "medication_name": "Lisinopril 10mg Tablet",
+      "ndc_code": "0093-3071-01",
+      "clinical_class": "ACE Inhibitor Antihypertensive",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 5,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T09:30:00Z",
+        "stock_history_24h": [90, 75, 60, 45, 30, 15, 5],
+        "expiration_date": "2027-07-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 6,
+        "estimated_wait_time": "25 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-amlo-5",
+          "medication_name": "Amlodipine 5mg Tablet",
+          "clinical_class": "Calcium Channel Blocker",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 410,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Different class antihypertensive. Appropriate alternative for most hypertension indications. Not equivalent for heart failure — confirm indication with prescriber."
+        },
+        {
+          "drug_id": "rx-losar-50",
+          "medication_name": "Losartan 50mg Tablet",
+          "clinical_class": "ARB Antihypertensive",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 290,
+          "estimated_wait_time": "12 minutes",
+          "therapeutic_notes": "Same class as ACE inhibitor for most indications. Preferred if ACE inhibitor cough is a concern. Avoid in pregnancy — same contraindication as Lisinopril."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-amlo-5",
+      "medication_name": "Amlodipine 5mg Tablet",
+      "ndc_code": "0069-1520-68",
+      "clinical_class": "Calcium Channel Blocker",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 410,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T08:00:00Z",
+        "stock_history_24h": [415, 414, 413, 412, 412, 411, 410],
+        "expiration_date": "2028-02-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-losar-50",
+      "medication_name": "Losartan 50mg Tablet",
+      "ndc_code": "0006-0951-54",
+      "clinical_class": "ARB Antihypertensive",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 290,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T07:00:00Z",
+        "stock_history_24h": [295, 294, 293, 292, 292, 291, 290],
+        "expiration_date": "2027-12-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "12 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-warf-5",
+      "medication_name": "Warfarin 5mg Tablet",
+      "ndc_code": "0056-0175-75",
+      "clinical_class": "Anticoagulant",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_5",
+        "last_drawer_open": "2026-04-12T05:00:00Z",
+        "stock_history_24h": [30, 25, 20, 15, 8, 3, 0],
+        "expiration_date": "2027-05-01",
+        "expiration_trend": "warning"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 10,
+        "current_queue_depth": 10,
+        "estimated_wait_time": "50 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-apix-5",
+          "medication_name": "Apixaban 5mg Tablet",
+          "clinical_class": "Direct Oral Anticoagulant",
+          "te_code": "BX",
+          "relative_cost": "higher",
+          "current_stock": 120,
+          "estimated_wait_time": "15 minutes",
+          "therapeutic_notes": "DOAC — different mechanism, no INR monitoring needed. Not a simple 1:1 substitute. Requires prescriber assessment of indication, renal function (CrCl), and bleeding risk. Escalate to prescriber."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-apix-5",
+      "medication_name": "Apixaban 5mg Tablet",
+      "ndc_code": "0003-2935-11",
+      "clinical_class": "Direct Oral Anticoagulant",
+      "formulary_tier": 2,
+      "te_code": "BX",
+      "hardware_telemetry": {
+        "current_stock": 120,
+        "machine_location": "OP_Pyxis_Station_5",
+        "last_drawer_open": "2026-04-11T16:00:00Z",
+        "stock_history_24h": [122, 122, 121, 121, 121, 120, 120],
+        "expiration_date": "2027-08-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 10,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "15 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-omep-20",
+      "medication_name": "Omeprazole 20mg Capsule",
+      "ndc_code": "0093-7334-98",
+      "clinical_class": "Proton Pump Inhibitor",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 350,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-12T09:00:00Z",
+        "stock_history_24h": [355, 354, 353, 352, 352, 351, 350],
+        "expiration_date": "2027-10-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-panto-40",
+          "medication_name": "Pantoprazole 40mg Tablet",
+          "clinical_class": "Proton Pump Inhibitor",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 280,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Same drug class, equivalent efficacy for GERD and ulcer indications. Slightly different drug interaction profile — fewer CYP2C19 interactions than omeprazole."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-panto-40",
+      "medication_name": "Pantoprazole 40mg Tablet",
+      "ndc_code": "0093-3017-14",
+      "clinical_class": "Proton Pump Inhibitor",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 280,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-12T08:30:00Z",
+        "stock_history_24h": [285, 284, 283, 282, 282, 281, 280],
+        "expiration_date": "2027-11-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-ator-20",
+      "medication_name": "Atorvastatin 20mg Tablet",
+      "ndc_code": "0069-0155-30",
+      "clinical_class": "Statin",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T07:00:00Z",
+        "stock_history_24h": [60, 50, 40, 28, 15, 5, 0],
+        "expiration_date": "2027-06-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 9,
+        "estimated_wait_time": "40 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-rosu-10",
+          "medication_name": "Rosuvastatin 10mg Tablet",
+          "clinical_class": "Statin",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 300,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Equivalent statin potency. Fewer CYP3A4 drug interactions than atorvastatin — preferred if patient is on macrolide antibiotics or other CYP3A4 inhibitors."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-rosu-10",
+      "medication_name": "Rosuvastatin 10mg Tablet",
+      "ndc_code": "0310-0755-90",
+      "clinical_class": "Statin",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 300,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T09:00:00Z",
+        "stock_history_24h": [305, 304, 303, 302, 302, 301, 300],
+        "expiration_date": "2028-03-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-ibu-400",
+      "medication_name": "Ibuprofen 400mg Tablet",
+      "ndc_code": "0093-0058-01",
+      "clinical_class": "NSAID Analgesic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 500,
+        "machine_location": "OP_Pyxis_Station_3",
+        "last_drawer_open": "2026-04-12T09:30:00Z",
+        "stock_history_24h": [510, 508, 506, 504, 503, 502, 500],
+        "expiration_date": "2028-06-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "8 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-para-500",
+          "medication_name": "Paracetamol 500mg Tablet",
+          "clinical_class": "Non-opioid Analgesic",
+          "te_code": "AB",
+          "relative_cost": "lower",
+          "current_stock": 600,
+          "estimated_wait_time": "8 minutes",
+          "therapeutic_notes": "Appropriate for pain/fever without anti-inflammatory need. Use if NSAID contraindicated (renal impairment, GI risk, anticoagulant use). Different mechanism — no anti-inflammatory effect."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-para-500",
+      "medication_name": "Paracetamol 500mg Tablet",
+      "ndc_code": "0904-1982-61",
+      "clinical_class": "Non-opioid Analgesic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 600,
+        "machine_location": "OP_Pyxis_Station_3",
+        "last_drawer_open": "2026-04-12T09:45:00Z",
+        "stock_history_24h": [605, 604, 604, 603, 602, 601, 600],
+        "expiration_date": "2028-08-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "8 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-pred-5",
+      "medication_name": "Prednisolone 5mg Tablet",
+      "ndc_code": "0054-4180-25",
+      "clinical_class": "Corticosteroid",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 3,
+        "machine_location": "OP_Pyxis_Station_5",
+        "last_drawer_open": "2026-04-12T08:00:00Z",
+        "stock_history_24h": [40, 35, 28, 20, 12, 6, 3],
+        "expiration_date": "2026-07-01",
+        "expiration_trend": "warning"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 7,
+        "estimated_wait_time": "30 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-dexa-2",
+          "medication_name": "Dexamethasone 2mg Tablet",
+          "clinical_class": "Corticosteroid",
+          "te_code": "BX",
+          "relative_cost": "equivalent",
+          "current_stock": 160,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Different potency — dexamethasone 0.75mg equivalent to prednisolone 5mg. Requires dose conversion. Escalate to prescriber for dose confirmation before dispensing."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-dexa-2",
+      "medication_name": "Dexamethasone 2mg Tablet",
+      "ndc_code": "0054-8187-25",
+      "clinical_class": "Corticosteroid",
+      "formulary_tier": 2,
+      "te_code": "BX",
+      "hardware_telemetry": {
+        "current_stock": 160,
+        "machine_location": "OP_Pyxis_Station_5",
+        "last_drawer_open": "2026-04-11T15:00:00Z",
+        "stock_history_24h": [162, 162, 161, 161, 161, 160, 160],
+        "expiration_date": "2027-09-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-sertr-50",
+      "medication_name": "Sertraline 50mg Tablet",
+      "ndc_code": "0049-4900-66",
+      "clinical_class": "SSRI Antidepressant",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 220,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T08:15:00Z",
+        "stock_history_24h": [225, 224, 223, 222, 222, 221, 220],
+        "expiration_date": "2027-12-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-escit-10",
+          "medication_name": "Escitalopram 10mg Tablet",
+          "clinical_class": "SSRI Antidepressant",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 190,
+          "estimated_wait_time": "10 minutes",
+          "therapeutic_notes": "Same drug class, equivalent efficacy. Slightly higher QT prolongation risk than sertraline. Well-tolerated alternative."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-escit-10",
+      "medication_name": "Escitalopram 10mg Tablet",
+      "ndc_code": "0456-2010-01",
+      "clinical_class": "SSRI Antidepressant",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 190,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T07:45:00Z",
+        "stock_history_24h": [193, 192, 192, 191, 191, 190, 190],
+        "expiration_date": "2028-01-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-salb-inh",
+      "medication_name": "Salbutamol 100mcg Inhaler",
+      "ndc_code": "0173-0682-20",
+      "clinical_class": "Short-Acting Beta Agonist",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T09:00:00Z",
+        "stock_history_24h": [25, 22, 18, 12, 7, 3, 0],
+        "expiration_date": "2027-04-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 5,
+        "estimated_wait_time": "22 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": [
+        {
+          "drug_id": "rx-terb-inh",
+          "medication_name": "Terbutaline 250mcg Inhaler",
+          "clinical_class": "Short-Acting Beta Agonist",
+          "te_code": "AB",
+          "relative_cost": "equivalent",
+          "current_stock": 85,
+          "estimated_wait_time": "12 minutes",
+          "therapeutic_notes": "Same drug class, equivalent bronchodilator effect. Slightly different dosing frequency. Appropriate direct substitute for mild-moderate asthma rescue."
+        }
+      ]
+    },
+    {
+      "drug_id": "rx-terb-inh",
+      "medication_name": "Terbutaline 250mcg Inhaler",
+      "ndc_code": "0085-0658-01",
+      "clinical_class": "Short-Acting Beta Agonist",
+      "formulary_tier": 2,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 85,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-11T16:30:00Z",
+        "stock_history_24h": [87, 87, 86, 86, 86, 85, 85],
+        "expiration_date": "2027-06-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "12 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    }
+  ],
+
+  "patients": [
+    {
+      "patient_id": "PAT-001",
+      "resourceType": "Patient",
+      "synthetic": true,
+      "name": "James Okafor",
+      "dob": "1965-03-14",
+      "gender": "male",
+      "scenario_label": "Happy path — no contraindications",
+      "scenario_triggers": [],
+      "allergies": [],
+      "labs": [
+        {
+          "test": "Serum Creatinine",
+          "value": 0.9,
+          "unit": "mg/dL",
+          "date": "2026-04-01",
+          "derived_CrCl": 88
+        }
+      ],
+      "active_medications": [
+        {
+          "medication": "Vitamin D3 1000IU",
+          "indication": "Deficiency prophylaxis",
+          "note": "No interactions expected"
+        }
+      ],
+      "comorbidities": ["Seasonal allergic rhinitis"]
+    },
+    {
+      "patient_id": "PAT-002",
+      "resourceType": "Patient",
+      "synthetic": true,
+      "name": "Maria Santos",
+      "dob": "1978-11-22",
+      "gender": "female",
+      "scenario_label": "Penicillin anaphylaxis — triggers cross-reactivity flag",
+      "scenario_triggers": ["penicillin_allergy"],
+      "allergies": [
+        {
+          "substance": "Penicillin",
+          "reaction": "Anaphylaxis",
+          "severity": "Severe",
+          "status": "Active",
+          "allergy_class": "Penicillin Antibiotic"
+        }
+      ],
+      "labs": [
+        {
+          "test": "Serum Creatinine",
+          "value": 0.8,
+          "unit": "mg/dL",
+          "date": "2026-03-15",
+          "derived_CrCl": 95
+        }
+      ],
+      "active_medications": [
+        {
+          "medication": "Oral Contraceptive Pill",
+          "indication": "Contraception",
+          "note": "Note potential interaction with antibiotics — advise patient on efficacy"
+        }
+      ],
+      "comorbidities": ["Mild asthma"]
+    },
+    {
+      "patient_id": "PAT-003",
+      "resourceType": "Patient",
+      "synthetic": true,
+      "name": "Robert Chen",
+      "dob": "1952-07-08",
+      "gender": "male",
+      "scenario_label": "CKD Stage 3 + anticoagulant — maximum complexity",
+      "scenario_triggers": ["ckd_stage3", "anticoagulant", "renal_adjustment_required"],
+      "allergies": [
+        {
+          "substance": "Sulfonamides",
+          "reaction": "Rash",
+          "severity": "Moderate",
+          "status": "Active",
+          "allergy_class": "Sulfonamide Antibiotic"
+        }
+      ],
+      "labs": [
+        {
+          "test": "Serum Creatinine",
+          "value": 1.8,
+          "unit": "mg/dL",
+          "date": "2026-04-10",
+          "derived_CrCl": 42
+        },
+        {
+          "test": "INR",
+          "value": 2.4,
+          "unit": "ratio",
+          "date": "2026-04-10",
+          "reference_range": "2.0-3.0 therapeutic"
+        }
+      ],
+      "active_medications": [
+        {
+          "medication": "Warfarin 5mg",
+          "indication": "Atrial Fibrillation",
+          "note": "Multiple drug interactions — CYP2C9 substrate. Check any new drug against warfarin interaction database."
+        },
+        {
+          "medication": "Furosemide 40mg",
+          "indication": "Fluid management",
+          "note": "Monitor renal function and electrolytes"
+        }
+      ],
+      "comorbidities": ["Chronic Kidney Disease Stage 3", "Atrial Fibrillation", "Heart Failure"]
+    },
+    {
+      "patient_id": "PAT-004",
+      "resourceType": "Patient",
+      "synthetic": true,
+      "name": "Amina Kowalski",
+      "dob": "1990-05-30",
+      "gender": "female",
+      "scenario_label": "Penicillin allergy + CKD — two simultaneous contraindications",
+      "scenario_triggers": ["penicillin_allergy", "ckd_stage3", "renal_adjustment_required"],
+      "allergies": [
+        {
+          "substance": "Penicillin",
+          "reaction": "Anaphylaxis",
+          "severity": "Severe",
+          "status": "Active",
+          "allergy_class": "Penicillin Antibiotic"
+        },
+        {
+          "substance": "NSAIDs",
+          "reaction": "Acute Kidney Injury",
+          "severity": "Severe",
+          "status": "Active",
+          "allergy_class": "NSAID Analgesic"
+        }
+      ],
+      "labs": [
+        {
+          "test": "Serum Creatinine",
+          "value": 1.6,
+          "unit": "mg/dL",
+          "date": "2026-04-08",
+          "derived_CrCl": 48
+        }
+      ],
+      "active_medications": [
+        {
+          "medication": "Amlodipine 5mg",
+          "indication": "Hypertension",
+          "note": "Therapeutic duplication risk if prescriber adds another calcium channel blocker"
+        },
+        {
+          "medication": "Metformin 500mg",
+          "indication": "Type 2 Diabetes",
+          "note": "Dose reduction may be needed — CrCl 48 is approaching threshold of 45 for standard dosing"
+        }
+      ],
+      "comorbidities": ["Chronic Kidney Disease Stage 3", "Hypertension", "Type 2 Diabetes"]
+    },
+    {
+      "patient_id": "PAT-005",
+      "resourceType": "Patient",
+      "synthetic": true,
+      "name": "David Mensah",
+      "dob": "1945-12-01",
+      "gender": "male",
+      "scenario_label": "Polypharmacy + all three triggers — therapeutic duplication + anticoagulant + CKD",
+      "scenario_triggers": ["anticoagulant", "ckd_stage4", "renal_adjustment_required", "polypharmacy", "qt_risk"],
+      "allergies": [
+        {
+          "substance": "Cephalosporins",
+          "reaction": "Hives",
+          "severity": "Moderate",
+          "status": "Active",
+          "allergy_class": "First-Gen Cephalosporin"
+        },
+        {
+          "substance": "Aspirin",
+          "reaction": "GI Bleed",
+          "severity": "Severe",
+          "status": "Active",
+          "allergy_class": "NSAID Analgesic"
+        }
+      ],
+      "labs": [
+        {
+          "test": "Serum Creatinine",
+          "value": 2.4,
+          "unit": "mg/dL",
+          "date": "2026-04-11",
+          "derived_CrCl": 28
+        },
+        {
+          "test": "QTc Interval",
+          "value": 462,
+          "unit": "ms",
+          "date": "2026-04-11",
+          "reference_range": "Normal < 440ms, Borderline 440-460ms, Prolonged > 460ms"
+        },
+        {
+          "test": "INR",
+          "value": 2.6,
+          "unit": "ratio",
+          "date": "2026-04-11",
+          "reference_range": "2.0-3.0 therapeutic"
+        }
+      ],
+      "active_medications": [
+        {
+          "medication": "Warfarin 5mg",
+          "indication": "Deep Vein Thrombosis",
+          "note": "Multiple interaction risks. CYP2C9 substrate."
+        },
+        {
+          "medication": "Amiodarone 200mg",
+          "indication": "Atrial Fibrillation",
+          "note": "Strong CYP2C9 inhibitor — increases warfarin effect. QT prolongation risk additive with other drugs."
+        },
+        {
+          "medication": "Atorvastatin 20mg",
+          "indication": "Hypercholesterolaemia",
+          "note": "CYP3A4 substrate — check new drug interactions"
+        },
+        {
+          "medication": "Lisinopril 5mg",
+          "indication": "Hypertension",
+          "note": "Dose already reduced for CKD Stage 4"
+        }
+      ],
+      "comorbidities": [
+        "Chronic Kidney Disease Stage 4",
+        "Atrial Fibrillation",
+        "Deep Vein Thrombosis",
+        "Hypercholesterolaemia",
+        "Hypertension"
+      ]
+    }
+  ]
+}
