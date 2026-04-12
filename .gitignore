@@ -1,0 +1,20 @@
+# Environments (Ensures secrets and local envs never leak)
+.env
+.env.*
+.venv
+env/
+venv/
+ENV/
+
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# VS Code / Codespaces
+.vscode/
+
+# OS / Misc
+.DS_Store
+Thumbs.db
