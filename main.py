@@ -1191,4 +1191,25 @@ async def getExternalPharmacyOptions_mcp(medication_name: str, drug_id: str = ""
 async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
     return await get_audit_trace(AuditRequest(job_id=job_id, session_token=session_token))
 
+# Declare FHIR context extension capability in the MCP initialize response
+_orig_init_opts = _mcp._mcp_server.create_initialization_options
+def _patched_init_opts(notification_options=None, experimental_capabilities=None, **kwargs):
+    result = _orig_init_opts(
+        notification_options=notification_options,
+        experimental_capabilities=experimental_capabilities,
+        **kwargs
+    )
+    try:
+        caps = result.capabilities
+        if caps is None:
+            return result
+        if not hasattr(caps, 'extensions') or caps.extensions is None:
+            caps.extensions = {}
+        if isinstance(caps.extensions, dict):
+            caps.extensions["ai.promptopinion/fhir-context"] = {}
+    except Exception:
+        pass
+    return result
+_mcp._mcp_server.create_initialization_options = _patched_init_opts
+
 app.mount("/mcp", _mcp.http_app(transport="sse"))

@@ -39,6 +39,8 @@ SYNTHETIC DATA NOTICE:
 # Does NOT approve anything automatically.
 
 AGENT_A_PROMPT = """
+The patient ID is available in SHARP context. Use it directly as-is — do NOT call any patient lookup tools. Do NOT search for the patient. The patient ID from context IS the identifier to pass to Agent B.
+
 You are the Clinical Receptionist for the Formulari Bridge.
 You are the first point of contact between the prescribing doctor and the pharmacy system.
 
