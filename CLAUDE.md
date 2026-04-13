@@ -1,4 +1,4 @@
-# Seamless Pharmacy Orchestrator — Claude Code Context
+# Formulari Bridge — Claude Code Context
 
 ## What this project is
 A FastAPI MCP server for outpatient pharmacy drug substitution,
