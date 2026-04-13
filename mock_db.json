@@ -713,6 +713,202 @@
         "trend_direction": "stable"
       },
       "formulary_alternatives": []
+    },
+
+    {
+      "drug_id": "rx-amox-250",
+      "medication_name": "Amoxicillin 250mg Capsule",
+      "ndc_code": "0093-3106-01",
+      "clinical_class": "Penicillin Antibiotic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-amox-500",
+      "dose_variant_type": "lower_dose",
+      "dose_note": "Half the standard dose. Suitable for mild infections or paediatric use. Confirm indication with prescriber.",
+      "hardware_telemetry": {
+        "current_stock": 180,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-12T07:00:00Z",
+        "stock_history_24h": [185, 184, 183, 182, 181, 181, 180],
+        "expiration_date": "2027-08-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-amox-875",
+      "medication_name": "Amoxicillin 875mg Tablet",
+      "ndc_code": "0093-3108-01",
+      "clinical_class": "Penicillin Antibiotic",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-amox-500",
+      "dose_variant_type": "higher_dose",
+      "dose_note": "Higher dose formulation for moderate-severe infections. Not interchangeable without prescriber confirmation of intended dosing frequency.",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_1",
+        "last_drawer_open": "2026-04-11T18:00:00Z",
+        "stock_history_24h": [22, 18, 14, 10, 6, 2, 0],
+        "expiration_date": "2027-05-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 8,
+        "estimated_wait_time": "35 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-lisi-5",
+      "medication_name": "Lisinopril 5mg Tablet",
+      "ndc_code": "0093-3070-01",
+      "clinical_class": "ACE Inhibitor Antihypertensive",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-lisi-10",
+      "dose_variant_type": "lower_dose",
+      "dose_note": "Starting dose for hypertension, or reduced dose for CKD/heart failure. Confirm prescriber intent.",
+      "hardware_telemetry": {
+        "current_stock": 310,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T08:30:00Z",
+        "stock_history_24h": [315, 314, 313, 312, 312, 311, 310],
+        "expiration_date": "2028-01-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-lisi-20",
+      "medication_name": "Lisinopril 20mg Tablet",
+      "ndc_code": "0093-3072-01",
+      "clinical_class": "ACE Inhibitor Antihypertensive",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-lisi-10",
+      "dose_variant_type": "higher_dose",
+      "dose_note": "Higher dose for inadequately controlled hypertension. Not interchangeable without prescriber confirmation.",
+      "hardware_telemetry": {
+        "current_stock": 240,
+        "machine_location": "OP_Pyxis_Station_4",
+        "last_drawer_open": "2026-04-12T07:15:00Z",
+        "stock_history_24h": [244, 243, 243, 242, 241, 241, 240],
+        "expiration_date": "2027-11-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-sertr-100",
+      "medication_name": "Sertraline 100mg Tablet",
+      "ndc_code": "0049-4901-66",
+      "clinical_class": "SSRI Antidepressant",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-sertr-50",
+      "dose_variant_type": "higher_dose",
+      "dose_note": "Maintenance or higher therapeutic dose. Confirm prescriber intent before substituting.",
+      "hardware_telemetry": {
+        "current_stock": 175,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-12T08:00:00Z",
+        "stock_history_24h": [178, 177, 177, 176, 176, 175, 175],
+        "expiration_date": "2028-02-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 1,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-sertr-25",
+      "medication_name": "Sertraline 25mg Tablet",
+      "ndc_code": "0049-4899-66",
+      "clinical_class": "SSRI Antidepressant",
+      "formulary_tier": 1,
+      "te_code": "AB",
+      "dose_variant_of": "rx-sertr-50",
+      "dose_variant_type": "lower_dose",
+      "dose_note": "Starting dose for sensitive patients or elderly. Not a direct substitute without prescriber confirmation.",
+      "hardware_telemetry": {
+        "current_stock": 0,
+        "machine_location": "OP_Pyxis_Station_2",
+        "last_drawer_open": "2026-04-11T14:00:00Z",
+        "stock_history_24h": [15, 12, 9, 6, 3, 1, 0],
+        "expiration_date": "2027-07-01",
+        "expiration_trend": "normal"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 5,
+        "estimated_wait_time": "22 minutes",
+        "trend_direction": "worsening"
+      },
+      "formulary_alternatives": []
+    }
+  ],
+
+  "external_pharmacies": [
+    {
+      "pharmacy_id": "ext-001",
+      "name": "MedPlus Pharmacy",
+      "type": "retail_chain",
+      "distance_meters": 320,
+      "walking_minutes": 4,
+      "address": "12 Jalan Bukit Timah, Ground Floor",
+      "phone": "+65 6123 4567",
+      "open_now": true,
+      "hours": "08:00–22:00",
+      "note": "Nearest option. Walk-in, no appointment needed."
+    },
+    {
+      "pharmacy_id": "ext-002",
+      "name": "Guardian Health Pharmacy",
+      "type": "retail_chain",
+      "distance_meters": 680,
+      "walking_minutes": 9,
+      "address": "45 Orchard Road, B1-12",
+      "phone": "+65 6234 5678",
+      "open_now": true,
+      "hours": "09:00–21:00",
+      "note": "Larger stock range. Good for less common medications."
+    },
+    {
+      "pharmacy_id": "ext-003",
+      "name": "Unity Pharmacy",
+      "type": "retail_chain",
+      "distance_meters": 950,
+      "walking_minutes": 13,
+      "address": "88 Somerset Road, #01-05",
+      "phone": "+65 6345 6789",
+      "open_now": true,
+      "hours": "08:30–21:30",
+      "note": "Open late. Good fallback if closer options are out of stock."
     }
   ],
 

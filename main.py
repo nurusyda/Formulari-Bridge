@@ -69,6 +69,40 @@ def get_patient(patient_id: str) -> dict | None:
             return patient
     return None
 
+def get_dose_variants(drug_id: str) -> dict:
+    """
+    Returns lower_dose and higher_dose variants of a drug if they exist.
+    Uses the dose_variant_of field to find siblings in the database.
+    """
+    db = load_db()
+    lower = None
+    higher = None
+    for drug in db["drugs"]:
+        if drug.get("dose_variant_of") == drug_id:
+            variant_type = drug.get("dose_variant_type", "")
+            entry = {
+                "drug_id": drug["drug_id"],
+                "medication_name": drug["medication_name"],
+                "current_stock": drug["hardware_telemetry"]["current_stock"],
+                "stock_status": (
+                    "OUT_OF_STOCK" if drug["hardware_telemetry"]["current_stock"] == 0
+                    else "LOW" if drug["hardware_telemetry"]["current_stock"] <= LOW_STOCK_THRESHOLD
+                    else "AVAILABLE"
+                ),
+                "estimated_wait_time": drug["logistics"]["estimated_wait_time"],
+                "dose_note": drug.get("dose_note", ""),
+                "requires_prescriber_confirmation": True,
+            }
+            if variant_type == "lower_dose":
+                lower = entry
+            elif variant_type == "higher_dose":
+                higher = entry
+    return {"lower_dose": lower, "higher_dose": higher}
+
+def get_external_pharmacies() -> list:
+    db = load_db()
+    return db.get("external_pharmacies", [])
+
 # ─── AUDIT LOG ────────────────────────────────────────────────────────────────
 
 _audit_store: dict[str, list[dict]] = {}
@@ -396,8 +430,8 @@ def predict_stockout_hours(stock_history: list[int], current_stock: int) -> floa
 # ─── FASTAPI APP ──────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Seamless Pharmacy Orchestrator — MCP Server",
-    description="MCP tools for outpatient pharmacy drug substitution. Synthetic data only.",
+    title="Formulari Bridge — MCP Server",
+    description="Formulari Bridge: clinical intent to pharmacy reality. Synthetic data only.",
     version="1.0.0",
 )
 
@@ -436,6 +470,11 @@ class ReplenishmentRequest(BaseModel):
 class AuditRequest(BaseModel):
     job_id: str
     session_token: str = ""
+
+class ExternalPharmacyRequest(BaseModel):
+    medication_name: str
+    drug_id: str = ""
+    job_id: str = ""
 
 
 # ─── TOOL 1: getHardwareInventory ────────────────────────────────────────────
@@ -696,6 +735,97 @@ async def get_audit_trace(req: AuditRequest):
     return result
 
 
+# ─── TOOL 6: getExternalPharmacyOptions ──────────────────────────────────────
+
+@app.post("/tools/getExternalPharmacyOptions")
+async def get_external_pharmacy_options(req: ExternalPharmacyRequest):
+    """
+    Returns nearby external pharmacies where the patient can purchase
+    the medication if the hospital formulary cannot fulfill it.
+
+    MOCK DATA — in production this would query a real-time pharmacy
+    availability API (e.g. GoodRx, NearbyPharmacy, or local equivalent)
+    using the patient's location and the drug name.
+
+    The safety flags from getFormularyAlternatives still apply to the
+    drug purchased externally — the molecule is the same.
+    """
+    job_id = req.job_id or str(uuid.uuid4())
+    pharmacies = get_external_pharmacies()
+
+    result = {
+        "medication_name": req.medication_name,
+        "drug_id": req.drug_id or "unknown",
+        "external_options": pharmacies,
+        "important_notes": [
+            "Patient pays out-of-pocket at external pharmacies.",
+            "Insurance may not reimburse if hospital formulary has an available equivalent.",
+            "Safety contraindication flags from the formulary check still apply — the molecule is the same drug.",
+            "In production: this tool queries real-time local pharmacy stock APIs.",
+        ],
+        "production_note": (
+            "Mock data — real deployment connects to pharmacy availability API "
+            "using patient location and drug name for live stock and pricing."
+        ),
+    }
+
+    log_audit(
+        job_id=job_id,
+        agent="Agent-B-HardwareSentinel",
+        tool_called="getExternalPharmacyOptions",
+        sharp_context_hash="no-patient-context",
+        input_data={"medication_name": req.medication_name, "drug_id": req.drug_id},
+        output_data=result,
+    )
+
+    return result
+
+
+# ─── TOOL 7: getDoseVariants ──────────────────────────────────────────────────
+
+@app.post("/tools/getDoseVariants")
+async def get_dose_variants_tool(req: InventoryRequest):
+    """
+    Returns lower-dose and higher-dose variants of a drug if they exist
+    in the formulary. These are NOT automatic substitutes — they always
+    require prescriber confirmation before dispensing.
+    """
+    job_id = req.job_id or str(uuid.uuid4())
+    query = req.medication_name_or_drug_id
+
+    drug = get_drug(query) or get_drug_by_name(query)
+    if not drug:
+        raise HTTPException(status_code=404, detail=f"Drug not found: {query}")
+
+    variants = get_dose_variants(drug["drug_id"])
+
+    result = {
+        "prescribed_drug_id": drug["drug_id"],
+        "prescribed_drug_name": drug["medication_name"],
+        "lower_dose_variant": variants["lower_dose"],
+        "higher_dose_variant": variants["higher_dose"],
+        "variants_found": (
+            variants["lower_dose"] is not None
+            or variants["higher_dose"] is not None
+        ),
+        "important_note": (
+            "Dose variants are NOT interchangeable without explicit prescriber confirmation. "
+            "Always present as options requiring doctor approval, never as automatic substitutes."
+        ),
+    }
+
+    log_audit(
+        job_id=job_id,
+        agent="Agent-B-HardwareSentinel",
+        tool_called="getDoseVariants",
+        sharp_context_hash=req.sharp_context_hash,
+        input_data={"query": query},
+        output_data=result,
+    )
+
+    return result
+
+
 # ─── HEALTH & UTILITY ─────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -772,6 +902,20 @@ async def demo_full_scenario():
     )
     formulary = await get_formulary_alternatives(form_req)
 
+    dose_req = InventoryRequest(
+        medication_name_or_drug_id="rx-amox-500",
+        job_id=job_id,
+        sharp_context_hash=sharp_hash,
+    )
+    dose_variants = await get_dose_variants_tool(dose_req)
+
+    ext_req = ExternalPharmacyRequest(
+        medication_name="Amoxicillin 500mg Capsule",
+        drug_id="rx-amox-500",
+        job_id=job_id,
+    )
+    external = await get_external_pharmacy_options(ext_req)
+
     rep_req = ReplenishmentRequest(drug_id="rx-amox-500", job_id=job_id)
     replenishment = await flag_low_stock_replenishment(rep_req)
 
@@ -784,6 +928,8 @@ async def demo_full_scenario():
         "step_1_inventory": inventory,
         "step_2_logistics": logistics,
         "step_3_formulary_with_flags": formulary,
-        "step_4_replenishment_alert": replenishment,
-        "step_5_audit_trail": audit,
+        "step_4_dose_variants": dose_variants,
+        "step_5_external_pharmacy_options": external,
+        "step_6_replenishment_alert": replenishment,
+        "step_7_audit_trail": audit,
     }
