@@ -27,6 +27,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp import FastMCP as _FastMCP
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
@@ -444,6 +445,12 @@ app.add_middleware(
 )
 
 
+@app.post("/openapi.json")
+async def openapi_post():
+    """Prompt Opinion calls POST /openapi.json to discover tools."""
+    return app.openapi()
+
+
 # ─── REQUEST / RESPONSE MODELS ────────────────────────────────────────────────
 
 class InventoryRequest(BaseModel):
@@ -466,6 +473,7 @@ class FormularyRequest(BaseModel):
 class ReplenishmentRequest(BaseModel):
     drug_id: str
     job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
 
 class AuditRequest(BaseModel):
     job_id: str
@@ -704,7 +712,7 @@ async def flag_low_stock_replenishment(req: ReplenishmentRequest):
         job_id=job_id,
         agent="Agent-B-HardwareSentinel",
         tool_called="flagLowStockReplenishment",
-        sharp_context_hash="no-patient-context",
+        sharp_context_hash=req.sharp_context_hash,
         input_data={"drug_id": req.drug_id},
         output_data=result,
     )
@@ -896,16 +904,7 @@ async def fhir_patient_read(patient_id: str):
     """
     patient = get_patient(patient_id)
     if not patient:
-        return {
-            "resourceType": "OperationOutcome",
-            "issue": [
-                {
-                    "severity": "error",
-                    "code": "not-found",
-                    "details": {"text": f"Patient/{patient_id} not found"},
-                }
-            ],
-        }
+        raise HTTPException(status_code=404, detail=f"Patient/{patient_id} not found")
 
     allergies_fhir = [
         {
@@ -1152,8 +1151,6 @@ async def demo_full_scenario():
 # This is what Prompt Opinion connects to — NOT the /tools/* REST endpoints.
 # The /tools/* endpoints remain for direct REST testing and the /docs UI.
 # Prompt Opinion endpoint to register: https://<your-url>/mcp
-
-from fastmcp import FastMCP as _FastMCP
 
 _mcp = _FastMCP(
     name="Formulari Bridge",
