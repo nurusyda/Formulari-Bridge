@@ -128,6 +128,7 @@ YOUR MCP TOOLS (all at the registered MCP server base URL):
 - getFormularyAlternatives  — therapeutic alternatives WITH contraindication flags
 - getDoseVariants           — lower and higher dose versions of the same drug
 - flagLowStockReplenishment — triggers reorder recommendation if stock is low
+- getExternalPharmacyOptions — external pharmacy availability when formulary cannot fulfill
 - getAuditTrace             — retrieves HMAC-signed audit log for this job
 
 WORKFLOW — run these steps in order for every prescription request:
@@ -141,6 +142,7 @@ Step 3: If stock_status is OUT_OF_STOCK or current_stock is 0:
      from SHARP context (pass patient_id as empty string if not available).
   b. For each alternative returned, confirm its stock with getHardwareInventory.
   c. Call getDoseVariants with the same drug_id to find lower/higher dose options.
+  d. If no alternatives were found from getFormularyAlternatives, call getExternalPharmacyOptions with the drug_id and medication_name.
 
 Step 4: If low_stock_alert is true for any drug in this workflow:
   Call flagLowStockReplenishment for that drug_id.

@@ -80,16 +80,20 @@ def get_dose_variants(drug_id: str) -> dict:
     for drug in db["drugs"]:
         if drug.get("dose_variant_of") == drug_id:
             variant_type = drug.get("dose_variant_type", "")
+            hardware = drug.get("hardware_telemetry", {})
+            logistics = drug.get("logistics", {})
+            current_stock = hardware.get("current_stock", 0)
+            estimated_wait_time = logistics.get("estimated_wait_time", "unknown")
             entry = {
-                "drug_id": drug["drug_id"],
-                "medication_name": drug["medication_name"],
-                "current_stock": drug["hardware_telemetry"]["current_stock"],
+                "drug_id": drug.get("drug_id", ""),
+                "medication_name": drug.get("medication_name", ""),
+                "current_stock": current_stock,
                 "stock_status": (
-                    "OUT_OF_STOCK" if drug["hardware_telemetry"]["current_stock"] == 0
-                    else "LOW" if drug["hardware_telemetry"]["current_stock"] <= LOW_STOCK_THRESHOLD
+                    "OUT_OF_STOCK" if current_stock == 0
+                    else "LOW" if current_stock <= LOW_STOCK_THRESHOLD
                     else "AVAILABLE"
                 ),
-                "estimated_wait_time": drug["logistics"]["estimated_wait_time"],
+                "estimated_wait_time": estimated_wait_time,
                 "dose_note": drug.get("dose_note", ""),
                 "requires_prescriber_confirmation": True,
             }
@@ -466,6 +470,7 @@ class FormularyRequest(BaseModel):
 class ReplenishmentRequest(BaseModel):
     drug_id: str
     job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
 
 class AuditRequest(BaseModel):
     job_id: str
@@ -475,6 +480,7 @@ class ExternalPharmacyRequest(BaseModel):
     medication_name: str
     drug_id: str = ""
     job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
 
 
 # ─── TOOL 1: getHardwareInventory ────────────────────────────────────────────
@@ -704,7 +710,7 @@ async def flag_low_stock_replenishment(req: ReplenishmentRequest):
         job_id=job_id,
         agent="Agent-B-HardwareSentinel",
         tool_called="flagLowStockReplenishment",
-        sharp_context_hash="no-patient-context",
+        sharp_context_hash=req.sharp_context_hash,
         input_data={"drug_id": req.drug_id},
         output_data=result,
     )
@@ -773,7 +779,7 @@ async def get_external_pharmacy_options(req: ExternalPharmacyRequest):
         job_id=job_id,
         agent="Agent-B-HardwareSentinel",
         tool_called="getExternalPharmacyOptions",
-        sharp_context_hash="no-patient-context",
+        sharp_context_hash=req.sharp_context_hash,
         input_data={"medication_name": req.medication_name, "drug_id": req.drug_id},
         output_data=result,
     )
