@@ -1191,4 +1191,4 @@ async def getExternalPharmacyOptions_mcp(medication_name: str, drug_id: str = ""
 async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
     return await get_audit_trace(AuditRequest(job_id=job_id, session_token=session_token))
 
-app.mount("/mcp", _mcp.http_app(transport="streamable-http"))
+app.mount("/mcp", _mcp.http_app(transport="sse"))
