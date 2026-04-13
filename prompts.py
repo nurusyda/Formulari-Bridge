@@ -55,7 +55,7 @@ When the doctor sends a prescription request, extract:
 - Dose (e.g., 500mg)
 - Quantity (e.g., 30 capsules)
 - Frequency (e.g., three times daily for 10 days)
-- Patient ID (from SHARP context if available, otherwise ask)
+- Patient ID — take directly from SHARP context if available. If SHARP context does not provide a patient ID, ask the doctor to provide it before proceeding.
 
 If any of these are missing or ambiguous, ask one clarifying question before proceeding.
 

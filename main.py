@@ -516,6 +516,7 @@ class ExternalPharmacyRequest(BaseModel):
     medicationName: str = ""
     patient_id: str = ""  # sometimes sent — ignored
     job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
 
 
 # ─── TOOL 1: getHardwareInventory ────────────────────────────────────────────
@@ -526,6 +527,8 @@ async def get_hardware_inventory(req: InventoryRequest):
     query = resolve_drug_query(
         req.medication_name_or_drug_id, req.medication, req.drug_name, req.drug, req.medicationName
     )
+    if not query:
+        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: medication_name_or_drug_id, medication, drug_name, drug, medicationName")
 
     drug = get_drug(query) or get_drug_by_name(query)
     if not drug:
@@ -570,6 +573,8 @@ async def get_logistics_estimate(req: LogisticsRequest):
     query = resolve_drug_query(
         req.drug_id, req.medication, req.medication_name, req.drug_name, req.medicationName
     )
+    if not query:
+        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: drug_id, medication, medication_name, drug_name, medicationName")
 
     drug = get_drug(query) or get_drug_by_name(query)
     if not drug:
@@ -621,6 +626,8 @@ async def get_formulary_alternatives(req: FormularyRequest):
     query = resolve_drug_query(
         req.drug_id, req.medication, req.medication_name, req.drug_name
     )
+    if not query:
+        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: drug_id, medication, medication_name, drug_name")
 
     drug = get_drug(query) or get_drug_by_name(query)
     if not drug:
@@ -803,11 +810,21 @@ async def get_external_pharmacy_options(req: ExternalPharmacyRequest):
     med_name = resolve_drug_query(
         req.medication_name, req.medication, req.drug_name, req.medicationName, req.drug_id
     )
+    if not med_name:
+        raise HTTPException(status_code=400, detail="No medication identifier provided. Supply one of: medication_name, medication, drug_name, medicationName, drug_id")
+
+    # Resolve canonical drug_id — look up by name if only a name was provided
+    if req.drug_id:
+        canonical_drug_id = req.drug_id
+    else:
+        resolved = get_drug_by_name(med_name)
+        canonical_drug_id = resolved["drug_id"] if resolved else "unknown"
+
     pharmacies = get_external_pharmacies()
 
     result = {
         "medication_name": med_name,
-        "drug_id": req.drug_id or "unknown",
+        "drug_id": canonical_drug_id,
         "external_options": pharmacies,
         "important_notes": [
             "Patient pays out-of-pocket at external pharmacies.",
@@ -825,8 +842,8 @@ async def get_external_pharmacy_options(req: ExternalPharmacyRequest):
         job_id=job_id,
         agent="Agent-B-HardwareSentinel",
         tool_called="getExternalPharmacyOptions",
-        sharp_context_hash="no-patient-context",
-        input_data={"medication_name": med_name, "drug_id": req.drug_id},
+        sharp_context_hash=req.sharp_context_hash,
+        input_data={"medication_name": med_name, "drug_id": canonical_drug_id},
         output_data=result,
     )
 
@@ -846,6 +863,8 @@ async def get_dose_variants_tool(req: InventoryRequest):
     query = resolve_drug_query(
         req.medication_name_or_drug_id, req.medication, req.drug_name, req.drug, req.medicationName
     )
+    if not query:
+        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: medication_name_or_drug_id, medication, drug_name, drug, medicationName")
 
     drug = get_drug(query) or get_drug_by_name(query)
     if not drug:
@@ -900,53 +919,61 @@ async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
     drug_id = drug["drug_id"]
     medication_name = drug["medication_name"]
 
+    async def _safe(step_name: str, coro):
+        try:
+            return await coro
+        except Exception as exc:
+            logger.warning("runFullPharmacyCheck %s failed: %s", step_name, exc)
+            return {"error": str(exc), "step_failed": step_name}
+
     # Step 1 — inventory
-    inventory = await get_hardware_inventory(InventoryRequest(
+    inventory = await _safe("step_1_inventory", get_hardware_inventory(InventoryRequest(
         medication_name_or_drug_id=drug_id,
         job_id=job_id,
         sharp_context_hash=sharp_hash,
-    ))
+    )))
 
     # Step 2 — logistics
-    logistics = await get_logistics_estimate(LogisticsRequest(
+    logistics = await _safe("step_2_logistics", get_logistics_estimate(LogisticsRequest(
         drug_id=drug_id,
         job_id=job_id,
         sharp_context_hash=sharp_hash,
-    ))
+    )))
 
     # Step 3 — formulary alternatives with patient contraindication flags
-    formulary = await get_formulary_alternatives(FormularyRequest(
+    formulary = await _safe("step_3_formulary_with_flags", get_formulary_alternatives(FormularyRequest(
         drug_id=drug_id,
         patient_id=req.patient_id,
         job_id=job_id,
         sharp_context_hash=sharp_hash,
-    ))
+    )))
 
     # Step 4 — dose variants
-    dose_variants = await get_dose_variants_tool(InventoryRequest(
+    dose_variants = await _safe("step_4_dose_variants", get_dose_variants_tool(InventoryRequest(
         medication_name_or_drug_id=drug_id,
         job_id=job_id,
         sharp_context_hash=sharp_hash,
-    ))
+    )))
 
     # Step 5 — external pharmacy options
-    external = await get_external_pharmacy_options(ExternalPharmacyRequest(
+    external = await _safe("step_5_external_pharmacy_options", get_external_pharmacy_options(ExternalPharmacyRequest(
         medication_name=medication_name,
         drug_id=drug_id,
         job_id=job_id,
-    ))
+        sharp_context_hash=sharp_hash,
+    )))
 
     # Step 6 — replenishment flag (only when stock is low or out)
     replenishment = None
     if inventory.get("stock_status") in ("OUT_OF_STOCK", "LOW") or logistics.get("low_stock_alert"):
-        replenishment = await flag_low_stock_replenishment(ReplenishmentRequest(
+        replenishment = await _safe("step_6_replenishment_alert", flag_low_stock_replenishment(ReplenishmentRequest(
             drug_id=drug_id,
             job_id=job_id,
             sharp_context_hash=sharp_hash,
-        ))
+        )))
 
     # Step 7 — audit trace
-    audit = await get_audit_trace(AuditRequest(job_id=job_id))
+    audit = await _safe("step_7_audit_trail", get_audit_trace(AuditRequest(job_id=job_id)))
 
     return {
         "job_id": job_id,
@@ -1339,8 +1366,8 @@ def _patched_init_opts(notification_options=None, experimental_capabilities=None
             caps.extensions = {}
         if isinstance(caps.extensions, dict):
             caps.extensions["ai.promptopinion/fhir-context"] = {}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("FHIR cap patch failed: %s", e)
     return result
 _mcp._mcp_server.create_initialization_options = _patched_init_opts
 
