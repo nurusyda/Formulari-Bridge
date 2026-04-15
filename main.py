@@ -29,8 +29,9 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP as _FastMCP
 from pydantic import BaseModel
 
@@ -1109,6 +1110,113 @@ async def classify_clinical_intent(req: ClassifyIntentRequest):
     )
 
     return result
+
+
+# ─── AUDIT DASHBOARD ─────────────────────────────────────────────────────────
+
+@app.get("/audit-dashboard", response_class=HTMLResponse)
+async def audit_dashboard(job_id: str = Query(default="")):
+    """Visual HTML display of the HMAC audit trail."""
+
+    def _integrity_badge(ok: bool) -> str:
+        if ok:
+            return '<span style="color:#18a868;font-weight:bold">&#10003; true</span>'
+        return '<span style="color:#d9363e;font-weight:bold">&#10007; false</span>'
+
+    def _job_section(jid: str, entries: list) -> str:
+        integrity = verify_audit_chain(entries) if entries else True
+        rows = ""
+        for e in entries:
+            sig_preview = e.get("hmac_signature", "")[:16]
+            rows += (
+                f"<tr>"
+                f"<td>{e.get('timestamp','')}</td>"
+                f"<td>{e.get('agent','')}</td>"
+                f"<td>{e.get('tool_called','')}</td>"
+                f"<td style='font-family:monospace'>{sig_preview}…</td>"
+                f"</tr>"
+            )
+        table = (
+            f"<table>"
+            f"<thead><tr>"
+            f"<th>Timestamp</th><th>Agent</th><th>Tool Called</th><th>HMAC (first 16)</th>"
+            f"</tr></thead>"
+            f"<tbody>{rows}</tbody>"
+            f"</table>"
+        ) if entries else "<p style='color:#888'>No entries for this job.</p>"
+
+        return (
+            f"<div class='job-card'>"
+            f"<div class='job-header'>"
+            f"<span class='job-id'>{jid}</span>"
+            f"<span class='meta'>Entries: <strong>{len(entries)}</strong></span>"
+            f"<span class='meta'>chain_integrity: {_integrity_badge(integrity)}</span>"
+            f"</div>"
+            f"{table}"
+            f"</div>"
+        )
+
+    # Determine which jobs to show
+    if job_id:
+        entries = _audit_store.get(job_id, [])
+        jobs_html = _job_section(job_id, entries)
+        title_suffix = f" — Job {job_id}"
+    else:
+        # Last 10 jobs by insertion order
+        recent = list(_audit_store.items())[-10:]
+        if recent:
+            jobs_html = "".join(_job_section(jid, ents) for jid, ents in reversed(recent))
+        else:
+            jobs_html = "<p style='color:#888;text-align:center'>No audit entries yet. Run a tool call first.</p>"
+        title_suffix = " — Recent Jobs"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audit Dashboard{title_suffix}</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: system-ui, sans-serif; background: #fff; color: #1a1a1a; padding: 24px; }}
+  h1 {{ color: #1D9E75; font-size: 1.5rem; margin-bottom: 4px; }}
+  .subtitle {{ color: #555; font-size: 0.875rem; margin-bottom: 24px; }}
+  .job-card {{ border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; overflow: hidden; }}
+  .job-header {{ background: #f4faf8; border-bottom: 1px solid #e0e0e0; padding: 12px 16px;
+                 display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }}
+  .job-id {{ font-family: monospace; font-size: 0.9rem; color: #1D9E75; font-weight: bold; flex: 1; }}
+  .meta {{ font-size: 0.85rem; color: #444; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
+  thead tr {{ background: #1D9E75; color: #fff; }}
+  th {{ padding: 8px 12px; text-align: left; font-weight: 600; }}
+  td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
+  tr:last-child td {{ border-bottom: none; }}
+  tbody tr:hover {{ background: #f9fffe; }}
+  p {{ padding: 16px; }}
+  .filter-bar {{ margin-bottom: 20px; display: flex; gap: 8px; align-items: center; }}
+  .filter-bar input {{ border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px;
+                       font-size: 0.875rem; width: 320px; outline: none; }}
+  .filter-bar input:focus {{ border-color: #1D9E75; }}
+  .filter-bar button {{ background: #1D9E75; color: #fff; border: none; border-radius: 4px;
+                        padding: 6px 14px; font-size: 0.875rem; cursor: pointer; }}
+  .filter-bar button:hover {{ background: #178a63; }}
+</style>
+</head>
+<body>
+<h1>Formulari Bridge — Audit Dashboard</h1>
+<p class="subtitle">HMAC-SHA256 signed audit trail &nbsp;|&nbsp; Synthetic data only</p>
+
+<form class="filter-bar" method="get" action="/audit-dashboard">
+  <input type="text" name="job_id" placeholder="Filter by Job ID…" value="{job_id}">
+  <button type="submit">Search</button>
+  {"<a href='/audit-dashboard' style='font-size:0.875rem;color:#1D9E75;text-decoration:none'>Clear</a>" if job_id else ""}
+</form>
+
+{jobs_html}
+</body>
+</html>"""
+
+    return HTMLResponse(content=html)
 
 
 # ─── HEALTH & UTILITY ─────────────────────────────────────────────────────────
