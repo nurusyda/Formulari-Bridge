@@ -927,6 +927,35 @@ async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
 
     # Resolve drug from name or ID
     drug = get_drug(req.medication) or get_drug_by_name(req.medication)
+
+    # If direct lookup fails, try resolving by drug class
+    if not drug:
+        DRUG_CLASS_MAP = {
+            "penicillin": "Amoxicillin 500mg",
+            "penicillin-class": "Amoxicillin 500mg",
+            "penicillin antibiotic": "Amoxicillin 500mg",
+            "penicillin-class antibiotics": "Amoxicillin 500mg",
+            "beta-lactam": "Amoxicillin 500mg",
+            "beta-lactam antibiotic": "Amoxicillin 500mg",
+            "macrolide": "Azithromycin 250mg",
+            "macrolide antibiotic": "Azithromycin 250mg",
+            "macrolide antibiotics": "Azithromycin 250mg",
+            "biguanide": "Metformin 500mg",
+            "biguanide antidiabetic": "Metformin 500mg",
+            "cephalosporin": "Cephalexin 500mg",
+            "first-gen cephalosporin": "Cephalexin 500mg",
+            "anticoagulant": "Warfarin 5mg",
+            "loop diuretic": "Furosemide 40mg",
+            "calcium channel blocker": "Amlodipine 5mg",
+            "nsaid": "Ibuprofen 400mg",
+            "nitrofuran": "Nitrofurantoin 100mg",
+            "fluoroquinolone": "Ciprofloxacin 500mg",
+        }
+        med_lower = req.medication.lower().strip()
+        mapped = DRUG_CLASS_MAP.get(med_lower)
+        if mapped:
+            drug = get_drug_by_name(mapped)
+
     if not drug:
         raise HTTPException(status_code=404, detail=f"Drug not found: {req.medication}")
 
