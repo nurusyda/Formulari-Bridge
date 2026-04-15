@@ -174,7 +174,7 @@ def main() -> None:
     )
 
     # Load patients from mock_db.json (single source of truth)
-    with open(MOCK_DB_PATH, "r") as f:
+    with open(MOCK_DB_PATH, "r", encoding="utf-8") as f:
         db = json.load(f)
 
     patients = {p["patient_id"]: p for p in db.get("patients", [])}
@@ -211,8 +211,9 @@ def main() -> None:
             note, drug_class, condition_category = parse_response(raw_text)
 
             if not note or not drug_class or not condition_category:
-                print(f"  [WARN] Note {i} for {patient_id} — could not parse full response:")
+                print(f"  [WARN] Note {i} for {patient_id} — skipping incomplete response:")
                 print(f"         {raw_text[:120]}")
+                continue
 
             entry = {
                 "patient_id": patient_id,
@@ -226,7 +227,7 @@ def main() -> None:
     print(f"\nTotal training pairs generated: {len(training_data)}")
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_PATH, "w") as f:
+    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(training_data, f, indent=2)
 
     print(f"Saved to {OUTPUT_PATH}")

@@ -14,6 +14,7 @@ All tool calls are HMAC-signed and logged.
 SYNTHETIC DATA ONLY — no real patient data.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,6 +25,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1020,9 +1022,12 @@ async def classify_clinical_intent(req: ClassifyIntentRequest):
         raise HTTPException(status_code=400, detail="clinical_note must not be empty")
 
     try:
-        result = classify_clinical_note(
-            clinical_note=req.clinical_note,
-            patient_id=req.patient_id or None,
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(classify_clinical_note,
+                    clinical_note=req.clinical_note,
+                    patient_id=req.patient_id or None),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -1036,7 +1041,7 @@ async def classify_clinical_intent(req: ClassifyIntentRequest):
         tool_called="classifyClinicalIntent",
         sharp_context_hash=req.sharp_context_hash,
         input_data={
-            "clinical_note": req.clinical_note,
+            "clinical_note": req.clinical_note[:100] + "..." if len(req.clinical_note) > 100 else req.clinical_note,
             "patient_id": req.patient_id or "none",
         },
         output_data=result,

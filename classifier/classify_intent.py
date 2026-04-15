@@ -35,13 +35,21 @@ REASONING: <one sentence explaining the classification>\
 """
 
 
+_MAX_FEW_SHOT_EXAMPLES = 20
+
+
 def _load_training_examples() -> list[dict]:
-    """Load few-shot training pairs from classifier/training_data.json."""
+    """Load few-shot training pairs from classifier/training_data.json (capped at 20)."""
     if not _TRAINING_DATA_PATH.exists():
         logger.warning("training_data.json not found at %s", _TRAINING_DATA_PATH)
         return []
-    with open(_TRAINING_DATA_PATH, "r") as f:
-        return json.load(f)
+    try:
+        with open(_TRAINING_DATA_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load training_data.json: %s", exc)
+        return []
+    return data[:_MAX_FEW_SHOT_EXAMPLES]
 
 
 def _build_few_shot_block(examples: list[dict]) -> str:
@@ -130,8 +138,11 @@ def classify_clinical_note(
         ],
         temperature=0.2,
         max_tokens=150,
+        timeout=30,
     )
 
+    if not response.choices:
+        raise RuntimeError("GitHub Models API returned an empty choices list.")
     raw_text = response.choices[0].message.content or ""
     logger.info("classify_clinical_note: raw response: %s", raw_text.replace("\n", " | "))
 
