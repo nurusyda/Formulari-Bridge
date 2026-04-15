@@ -870,6 +870,75 @@
         "trend_direction": "worsening"
       },
       "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-nitro-100",
+      "medication_name": "Nitrofurantoin 100mg Capsule",
+      "ndc_code": "0781-2090-01",
+      "clinical_class": "Nitrofuran Antibiotic",
+      "formulary_tier": 2,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 150,
+        "machine_location": "OP Pyxis Station 3",
+        "last_drawer_open": "2026-04-15T06:00:00Z",
+        "stock_history_24h": [160, 155, 150],
+        "expiration_date": "2027-06-30",
+        "expiration_trend": "stable"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-cipro-500",
+      "medication_name": "Ciprofloxacin 500mg Tablet",
+      "ndc_code": "0049-4855-30",
+      "clinical_class": "Fluoroquinolone Antibiotic",
+      "formulary_tier": 2,
+      "te_code": "AB",
+      "hardware_telemetry": {
+        "current_stock": 120,
+        "machine_location": "OP Pyxis Station 3",
+        "last_drawer_open": "2026-04-15T06:00:00Z",
+        "stock_history_24h": [130, 125, 120],
+        "expiration_date": "2027-06-30",
+        "expiration_trend": "stable"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
+    },
+    {
+      "drug_id": "rx-furo-40",
+      "medication_name": "Furosemide 40mg Tablet",
+      "ndc_code": "0093-0170-01",
+      "clinical_class": "Loop Diuretic",
+      "formulary_tier": 1,
+      "te_code": "AA",
+      "hardware_telemetry": {
+        "current_stock": 200,
+        "machine_location": "OP Pyxis Station 3",
+        "last_drawer_open": "2026-04-15T06:00:00Z",
+        "stock_history_24h": [210, 205, 200],
+        "expiration_date": "2027-06-30",
+        "expiration_trend": "stable"
+      },
+      "logistics": {
+        "preparation_complexity_minutes": 5,
+        "current_queue_depth": 2,
+        "estimated_wait_time": "10 minutes",
+        "trend_direction": "stable"
+      },
+      "formulary_alternatives": []
     }
   ],
 
