@@ -1244,7 +1244,7 @@ async def fhir_patient_read(patient_id: str):
                     "gender": patient.get("gender", "unknown"),
                     "extension": [
                         {
-                            "url": "synthetic-data-notice",
+                            "url": "http://formulari-bridge.health/fhir/StructureDefinition/synthetic-data-notice",
                             "valueString": patient.get("scenario_label", ""),
                         }
                     ],
@@ -1304,8 +1304,8 @@ async def fhir_patient_search(
                 "birthDate": p.get("dob", ""),
                 "gender": p.get("gender", "unknown"),
                 "extension": [
-                    {"url": "scenario_label", "valueString": p.get("scenario_label", "")},
-                    {"url": "synthetic-data-notice", "valueString": "SYNTHETIC — not real patient data"},
+                    {"url": "http://formulari-bridge.health/fhir/StructureDefinition/scenario-label", "valueString": p.get("scenario_label", "")},
+                    {"url": "http://formulari-bridge.health/fhir/StructureDefinition/synthetic-data-notice", "valueString": "SYNTHETIC — not real patient data"},
                 ],
             },
             "search": {"mode": "match"},
