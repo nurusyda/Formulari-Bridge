@@ -880,11 +880,11 @@
       "te_code": "AB",
       "hardware_telemetry": {
         "current_stock": 150,
-        "machine_location": "OP Pyxis Station 3",
+        "machine_location": "OP_Pyxis_Station_3",
         "last_drawer_open": "2026-04-15T06:00:00Z",
-        "stock_history_24h": [160, 155, 150],
+        "stock_history_24h": [160, 158, 157, 156, 155, 152, 150],
         "expiration_date": "2027-06-30",
-        "expiration_trend": "stable"
+        "expiration_trend": "normal"
       },
       "logistics": {
         "preparation_complexity_minutes": 5,
@@ -903,11 +903,11 @@
       "te_code": "AB",
       "hardware_telemetry": {
         "current_stock": 120,
-        "machine_location": "OP Pyxis Station 3",
+        "machine_location": "OP_Pyxis_Station_3",
         "last_drawer_open": "2026-04-15T06:00:00Z",
-        "stock_history_24h": [130, 125, 120],
+        "stock_history_24h": [130, 128, 127, 125, 123, 122, 120],
         "expiration_date": "2027-06-30",
-        "expiration_trend": "stable"
+        "expiration_trend": "normal"
       },
       "logistics": {
         "preparation_complexity_minutes": 5,
@@ -926,11 +926,11 @@
       "te_code": "AA",
       "hardware_telemetry": {
         "current_stock": 200,
-        "machine_location": "OP Pyxis Station 3",
+        "machine_location": "OP_Pyxis_Station_3",
         "last_drawer_open": "2026-04-15T06:00:00Z",
-        "stock_history_24h": [210, 205, 200],
+        "stock_history_24h": [210, 208, 206, 204, 203, 201, 200],
         "expiration_date": "2027-06-30",
-        "expiration_trend": "stable"
+        "expiration_trend": "normal"
       },
       "logistics": {
         "preparation_complexity_minutes": 5,
