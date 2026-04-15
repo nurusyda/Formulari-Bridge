@@ -180,6 +180,30 @@ def verify_audit_chain(entries: list[dict]) -> bool:
 # This is the safety-critical layer. Flags come from here.
 # The LLM (Agent C) explains these flags — it never invents them.
 
+# Drug class fallback map — maps generic class terms to specific formulary drugs.
+# Must stay in sync with mock_db.json drug entries.
+DRUG_CLASS_MAP = {
+    "penicillin": "Amoxicillin 500mg",
+    "penicillin-class": "Amoxicillin 500mg",
+    "penicillin antibiotic": "Amoxicillin 500mg",
+    "penicillin-class antibiotics": "Amoxicillin 500mg",
+    "beta-lactam": "Amoxicillin 500mg",
+    "beta-lactam antibiotic": "Amoxicillin 500mg",
+    "macrolide": "Azithromycin 250mg",
+    "macrolide antibiotic": "Azithromycin 250mg",
+    "macrolide antibiotics": "Azithromycin 250mg",
+    "biguanide": "Metformin 500mg",
+    "biguanide antidiabetic": "Metformin 500mg",
+    "cephalosporin": "Cephalexin 500mg",
+    "first-gen cephalosporin": "Cephalexin 500mg",
+    "anticoagulant": "Warfarin 5mg",
+    "loop diuretic": "Furosemide 40mg",
+    "calcium channel blocker": "Amlodipine 5mg",
+    "nsaid": "Ibuprofen 400mg",
+    "nitrofuran": "Nitrofurantoin 100mg",
+    "fluoroquinolone": "Ciprofloxacin 500mg",
+}
+
 PENICILLIN_CLASS = "Penicillin Antibiotic"
 CEPHALOSPORIN_CLASS = "First-Gen Cephalosporin"
 MACROLIDE_CLASS = "Macrolide Antibiotic"
@@ -930,27 +954,6 @@ async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
 
     # If direct lookup fails, try resolving by drug class
     if not drug:
-        DRUG_CLASS_MAP = {
-            "penicillin": "Amoxicillin 500mg",
-            "penicillin-class": "Amoxicillin 500mg",
-            "penicillin antibiotic": "Amoxicillin 500mg",
-            "penicillin-class antibiotics": "Amoxicillin 500mg",
-            "beta-lactam": "Amoxicillin 500mg",
-            "beta-lactam antibiotic": "Amoxicillin 500mg",
-            "macrolide": "Azithromycin 250mg",
-            "macrolide antibiotic": "Azithromycin 250mg",
-            "macrolide antibiotics": "Azithromycin 250mg",
-            "biguanide": "Metformin 500mg",
-            "biguanide antidiabetic": "Metformin 500mg",
-            "cephalosporin": "Cephalexin 500mg",
-            "first-gen cephalosporin": "Cephalexin 500mg",
-            "anticoagulant": "Warfarin 5mg",
-            "loop diuretic": "Furosemide 40mg",
-            "calcium channel blocker": "Amlodipine 5mg",
-            "nsaid": "Ibuprofen 400mg",
-            "nitrofuran": "Nitrofurantoin 100mg",
-            "fluoroquinolone": "Ciprofloxacin 500mg",
-        }
         med_lower = req.medication.lower().strip()
         mapped = DRUG_CLASS_MAP.get(med_lower)
         if mapped:
@@ -1252,6 +1255,25 @@ async def fhir_patient_read(patient_id: str):
             *[{"fullUrl": f"MedicationStatement/{m['id']}", "resource": m} for m in medications_fhir],
         ],
     }
+
+    return bundle
+
+
+@app.get("/fhir/Patient/{patient_id}/bundle")
+async def fhir_patient_bundle_for_import(patient_id: str):
+    """
+    FHIR R4 Patient bundle formatted for import into Prompt Opinion.
+    Returns type: collection instead of searchset.
+    """
+    # Get the existing bundle
+    bundle = await fhir_patient_read(patient_id)
+
+    # Change type to collection for import compatibility
+    bundle["type"] = "collection"
+
+    # Remove search mode from entries
+    for entry in bundle.get("entry", []):
+        entry.pop("search", None)
 
     return bundle
 
