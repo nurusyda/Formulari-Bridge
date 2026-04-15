@@ -20,15 +20,21 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP as _FastMCP
 from pydantic import BaseModel
+
+# Classifier module — add its directory to sys.path so it can import openai
+sys.path.insert(0, str(Path(__file__).parent))
+from classifier.classify_intent import classify_clinical_note
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -518,6 +524,12 @@ class ExternalPharmacyRequest(BaseModel):
     job_id: str = ""
     sharp_context_hash: str = "no-patient-context"
 
+class ClassifyIntentRequest(BaseModel):
+    clinical_note: str
+    patient_id: str = ""
+    job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
+
 
 # ─── TOOL 1: getHardwareInventory ────────────────────────────────────────────
 
@@ -989,6 +1001,50 @@ async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
     }
 
 
+# ─── TOOL 9: classifyClinicalIntent ──────────────────────────────────────────
+
+@app.post("/tools/classifyClinicalIntent")
+async def classify_clinical_intent(req: ClassifyIntentRequest):
+    """
+    Reads a doctor's free-text clinical note and maps it to a drug class need.
+    Use this BEFORE runFullPharmacyCheck when the doctor writes a clinical note
+    instead of a specific drug name. Returns drug_class_needed to pass to
+    runFullPharmacyCheck.
+
+    Calls GPT-4o via GitHub Models API with the 25 few-shot training examples
+    from classifier/training_data.json. GITHUB_TOKEN must be set in environment.
+    """
+    job_id = req.job_id or str(uuid.uuid4())
+
+    if not req.clinical_note or not req.clinical_note.strip():
+        raise HTTPException(status_code=400, detail="clinical_note must not be empty")
+
+    try:
+        result = classify_clinical_note(
+            clinical_note=req.clinical_note,
+            patient_id=req.patient_id or None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("classifyClinicalIntent failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Classification error: {exc}")
+
+    log_audit(
+        job_id=job_id,
+        agent="Agent-A-ClinicalCopilot",
+        tool_called="classifyClinicalIntent",
+        sharp_context_hash=req.sharp_context_hash,
+        input_data={
+            "clinical_note": req.clinical_note,
+            "patient_id": req.patient_id or "none",
+        },
+        output_data=result,
+    )
+
+    return result
+
+
 # ─── HEALTH & UTILITY ─────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -1349,6 +1405,10 @@ async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
 @_mcp.tool(description="Run complete pharmacy check for a drug and patient in one call. Returns inventory, logistics, formulary alternatives with contraindication flags, dose variants, and external pharmacy options. Parameters: medication (drug name), patient_id (e.g. PAT-001)")
 async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await run_full_pharmacy_check(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
+
+@_mcp.tool(description="Reads a doctor's free-text clinical note and maps it to a drug class need. Use this BEFORE runFullPharmacyCheck when the doctor writes a clinical note instead of a specific drug name. Returns drug_class_needed to pass to runFullPharmacyCheck.")
+async def classifyClinicalIntent_mcp(clinical_note: str, patient_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
+    return await classify_clinical_intent(ClassifyIntentRequest(clinical_note=clinical_note, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
 # Declare FHIR context extension capability in the MCP initialize response
 _orig_init_opts = _mcp._mcp_server.create_initialization_options

@@ -1,0 +1,152 @@
+[
+  {
+    "patient_id": "PAT-001",
+    "note": "Patient presents with symptoms consistent with an upper respiratory tract infection, including nasal congestion and sore throat. History of seasonal allergic rhinitis. Plan: prescribe penicillin-class antibiotics for suspected bacterial infection.",
+    "drug_class_needed": "penicillin-class antibiotics",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-001",
+    "note": "Patient presents with productive cough, fever, and shortness of breath suggestive of community-acquired pneumonia. History of seasonal allergic rhinitis. Plan: prescribe macrolide antibiotics for bacterial infection.",
+    "drug_class_needed": "macrolide antibiotics",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-001",
+    "note": "Patient presents with sore throat and mild fever, consistent with likely streptococcal pharyngitis. History of seasonal allergic rhinitis. Plan: prescribe penicillins for bacterial infection.",
+    "drug_class_needed": "penicillins",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-001",
+    "note": "Patient presents with a dental abscess causing localized swelling and pain. History of seasonal allergic rhinitis, with no known drug allergies. Plan: prescribe a penicillin-class antibiotic for bacterial infection and recommend follow-up with a dentist.",
+    "drug_class_needed": "penicillin-class antibiotic",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-001",
+    "note": "Patient presents with nasal congestion, rhinorrhea, and facial pressure consistent with an allergic rhinitis flare complicated by a secondary sinus infection. History of seasonal allergic rhinitis. Plan: prescribe an intranasal corticosteroid for inflammation management and a beta-lactam antibiotic for bacterial sinusitis.",
+    "drug_class_needed": "intranasal corticosteroid, beta-lactam antibiotic",
+    "condition_category": "allergic_rhinitis_with_sinus_infection"
+  },
+  {
+    "patient_id": "PAT-002",
+    "note": "Patient presents with sore throat, fever, and difficulty swallowing consistent with bacterial tonsillitis. History of penicillin allergy (anaphylaxis) and mild asthma. Plan: prescribe macrolide antibiotics for bacterial infection.",
+    "drug_class_needed": "macrolide antibiotics",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-002",
+    "note": "Patient presents with symptoms consistent with atypical pneumonia, including cough and low-grade fever. History of mild asthma and penicillin allergy (anaphylaxis). Plan: prescribe macrolide antibiotics for bacterial respiratory infection.",
+    "drug_class_needed": "macrolide antibiotics",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-002",
+    "note": "Patient presents with a skin and soft tissue infection. History of mild asthma and severe anaphylaxis to penicillin. Plan: prescribe a macrolide for bacterial infection due to penicillin allergy.",
+    "drug_class_needed": "macrolide",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-002",
+    "note": "Patient presents with acute exacerbation of asthma characterized by wheezing and shortness of breath. History of mild asthma and severe penicillin allergy. Plan: prescribe short-acting beta-agonist for bronchodilation.",
+    "drug_class_needed": "Short-acting beta-agonist",
+    "condition_category": "asthma_exacerbation"
+  },
+  {
+    "patient_id": "PAT-002",
+    "note": "Patient presents with dysuria and urinary frequency, consistent with a urinary tract infection. History notable for penicillin allergy (anaphylaxis) and mild asthma. Plan: prescribe a nitrofuran antibiotic for bacterial infection, avoiding beta-lactams due to allergy.",
+    "drug_class_needed": "nitrofuran antibiotic",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-003",
+    "note": "Patient presents with symptoms of a lower respiratory infection. History of chronic kidney disease stage 3 and atrial fibrillation. Plan: prescribe a renal-adjusted dose of a beta-lactam antibiotic for bacterial infection.",
+    "drug_class_needed": "beta-lactam antibiotic",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-003",
+    "note": "Patient presents with signs of fluid overload, including peripheral edema and weight gain. History of heart failure, atrial fibrillation, and chronic kidney disease stage 3. Plan: increase loop diuretic dosage for volume overload management while monitoring renal function and electrolytes.",
+    "drug_class_needed": "loop diuretics",
+    "condition_category": "heart_failure"
+  },
+  {
+    "patient_id": "PAT-003",
+    "note": "Patient presents for anticoagulation monitoring while on warfarin therapy. INR is within the therapeutic range for atrial fibrillation. Plan: continue current anticoagulation regimen and recheck INR in 1 week.",
+    "drug_class_needed": "anticoagulant",
+    "condition_category": "anticoagulation"
+  },
+  {
+    "patient_id": "PAT-003",
+    "note": "Patient presents with dysuria and urinary frequency, consistent with a urinary tract infection. History of chronic kidney disease, atrial fibrillation, and heart failure, with a noted allergy to sulfonamides. Plan: prescribe a nitrofurantoin for bacterial infection, avoiding sulfonamides and minimizing potential interactions with warfarin.",
+    "drug_class_needed": "nitrofurans",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-003",
+    "note": "Patient presents with symptoms consistent with community-acquired pneumonia. History of chronic kidney disease, atrial fibrillation, and heart failure; warfarin interaction noted. Plan: prescribe a respiratory fluoroquinolone for bacterial infection, with close INR monitoring due to potential interaction with warfarin.",
+    "drug_class_needed": "Fluoroquinolone",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-004",
+    "note": "Patient presents for glycaemic control management with chronic kidney disease stage 3. History of Type 2 Diabetes and currently on metformin 500mg; given her renal function, recommend reducing the metformin dose to minimize risk of lactic acidosis. Plan: adjust metformin dose and monitor renal function closely.",
+    "drug_class_needed": "biguanide",
+    "condition_category": "diabetes"
+  },
+  {
+    "patient_id": "PAT-004",
+    "note": "Patient presents with elevated blood pressure despite current therapy. History of chronic kidney disease stage 3 and hypertension. Plan: titrate calcium channel blocker dose for improved blood pressure control while monitoring renal function.",
+    "drug_class_needed": "Calcium channel blocker",
+    "condition_category": "hypertension"
+  },
+  {
+    "patient_id": "PAT-004",
+    "note": "Patient presents with bacterial skin infection. History of penicillin allergy (anaphylaxis) and NSAID allergy (acute kidney injury), with comorbid chronic kidney disease stage 3, hypertension, and type 2 diabetes. Plan: prescribe a macrolide antibiotic for bacterial infection, considering allergies and renal function.",
+    "drug_class_needed": "Macrolide antibiotic",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-004",
+    "note": "Patient presents with a diabetic foot infection. History of chronic kidney disease stage 3, hypertension, and type 2 diabetes, with severe allergies to penicillin and NSAIDs. Plan: prescribe a renal-safe antibiotic from the lincosamide class for bacterial infection management.",
+    "drug_class_needed": "Lincosamide",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-004",
+    "note": "Patient presents for hypertension follow-up with a history of Chronic Kidney Disease Stage 3, Type 2 Diabetes, and severe allergies to penicillin and NSAIDs. Given the comorbidities, an angiotensin receptor blocker will be considered as an alternative to an ACE inhibitor to manage blood pressure and provide renal protection. Plan: initiate therapy with an angiotensin receptor blocker, titrating as needed.",
+    "drug_class_needed": "angiotensin receptor blocker",
+    "condition_category": "hypertension_with_ckd"
+  },
+  {
+    "patient_id": "PAT-005",
+    "note": "Patient presents for polypharmacy review with concern for potential interaction between warfarin and amiodarone, which may increase bleeding risk. History of atrial fibrillation and deep vein thrombosis on long-term anticoagulation. Plan: monitor INR closely and consider dose adjustment of warfarin as needed.",
+    "drug_class_needed": "anticoagulant",
+    "condition_category": "anticoagulation"
+  },
+  {
+    "patient_id": "PAT-005",
+    "note": "Patient presents with symptoms of respiratory infection. History of chronic kidney disease stage 4 and allergies to cephalosporins and NSAIDs; QT-prolonging agents are to be avoided. Plan: prescribe a macrolide antibiotic for presumed bacterial respiratory infection.",
+    "drug_class_needed": "Macrolide",
+    "condition_category": "bacterial_infection"
+  },
+  {
+    "patient_id": "PAT-005",
+    "note": "Patient presents for deep vein thrombosis anticoagulation monitoring with a history of chronic kidney disease stage 4. INR levels were checked to ensure therapeutic range on warfarin therapy. Plan: continue monitoring INR closely and adjust warfarin dose as necessary to maintain target range.",
+    "drug_class_needed": "Vitamin K antagonist",
+    "condition_category": "anticoagulation"
+  },
+  {
+    "patient_id": "PAT-005",
+    "note": "Patient presents for hyperlipidaemia management. History of chronic kidney disease and atrial fibrillation on amiodarone, raising concerns of CYP3A4 interaction with current high-intensity statin therapy. Plan: reduce atorvastatin dose and consider switching to a non-CYP3A4-metabolized statin to mitigate interaction risk.",
+    "drug_class_needed": "HMG-CoA reductase inhibitors",
+    "condition_category": "hyperlipidaemia"
+  },
+  {
+    "patient_id": "PAT-005",
+    "note": "Patient presents with hypertension requiring control in the context of severe chronic kidney disease. History of allergies to cephalosporins and NSAIDs. Plan: cautiously titrate ACE inhibitor dose for improved blood pressure management while monitoring renal function and potassium levels.",
+    "drug_class_needed": "ACE inhibitors",
+    "condition_category": "hypertension_management"
+  }
+]
