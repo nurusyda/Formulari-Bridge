@@ -1595,11 +1595,11 @@ async def getExternalPharmacyOptions_mcp(medication_name: str, drug_id: str = ""
 async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
     return await get_audit_trace(AuditRequest(job_id=job_id, session_token=session_token))
 
-@_mcp.tool(description="Run complete pharmacy check for a drug and patient in one call. Returns inventory, logistics, formulary alternatives with contraindication flags, dose variants, and external pharmacy options. Parameters: medication (drug name), patient_id (e.g. PAT-001)")
+@_mcp.tool(description="PRIMARY TOOL — call this first whenever you have a drug name or drug ID and a patient_id. Runs the complete pharmacy workflow in one call: inventory, logistics, formulary alternatives with contraindication flags, dose variants, and external pharmacy options. Use this for inputs like 'Amoxicillin + PAT-002'. Parameters: medication (drug name or ID), patient_id (e.g. PAT-001).")
 async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await run_full_pharmacy_check(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
-@_mcp.tool(description="Reads a doctor's free-text clinical note and maps it to a drug class need. Use this BEFORE runFullPharmacyCheck when the doctor writes a clinical note instead of a specific drug name. Returns drug_class_needed to pass to runFullPharmacyCheck.")
+@_mcp.tool(description="DO NOT CALL DIRECTLY for drug name inputs (e.g. 'Amoxicillin + PAT-002') — use runFullPharmacyCheck_mcp instead. Only call this when the doctor provides a free-text clinical note with no drug name (e.g. 'patient needs antibiotic for UTI'). Reads the note, maps it to a drug_class_needed, then pass that to runFullPharmacyCheck_mcp.")
 async def classifyClinicalIntent_mcp(clinical_note: str, patient_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await classify_clinical_intent(ClassifyIntentRequest(clinical_note=clinical_note, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
