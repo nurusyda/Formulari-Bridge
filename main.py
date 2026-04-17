@@ -1233,6 +1233,23 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
         )
         options.append(f"Option {n}: External pharmacies - {ext_str}")
 
+    # ── Option 0: prescribed drug when it carries CRITICAL/HIGH flags ────────
+    # Always surfaced so the doctor can still choose it, but the override flow
+    # is mandatory. Inserted at position 0 so safe alternatives remain 1-based.
+    has_primary_critical = any(f.get("severity") in ("CRITICAL", "HIGH") for f in primary_flags)
+    if has_primary_critical:
+        prescribed_name = full.get("medication", req.medication)
+        prescribed_wait = full.get("step_2_logistics", {}).get("estimated_wait_time", "unknown")
+        flag_types = list(dict.fromkeys(
+            f["flag_type"] for f in primary_flags
+            if f.get("severity") in ("CRITICAL", "HIGH")
+        ))
+        flag_summary = ", ".join(flag_types)
+        options.insert(0,
+            f"Option 0: {prescribed_name} - {stock_status} - {prescribed_wait}"
+            f" - \u26a0 OVERRIDE REQUIRED: {flag_summary} - Doctor must confirm override reason"
+        )
+
     # ── Recommendation ────────────────────────────────────────────────────────
     if recommended_idx is not None:
         rec_name = sorted_alts[recommended_idx - 1]["medication_name"]
