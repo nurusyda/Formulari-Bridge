@@ -1015,42 +1015,36 @@ async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
             logger.warning("runFullPharmacyCheck %s failed: %s", step_name, exc)
             return {"error": str(exc), "step_failed": step_name}
 
-    # Step 1 — inventory
-    inventory = await _safe("step_1_inventory", get_hardware_inventory(InventoryRequest(
-        medication_name_or_drug_id=drug_id,
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )))
-
-    # Step 2 — logistics
-    logistics = await _safe("step_2_logistics", get_logistics_estimate(LogisticsRequest(
-        drug_id=drug_id,
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )))
-
-    # Step 3 — formulary alternatives with patient contraindication flags
-    formulary = await _safe("step_3_formulary_with_flags", get_formulary_alternatives(FormularyRequest(
-        drug_id=drug_id,
-        patient_id=req.patient_id,
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )))
-
-    # Step 4 — dose variants
-    dose_variants = await _safe("step_4_dose_variants", get_dose_variants_tool(InventoryRequest(
-        medication_name_or_drug_id=drug_id,
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )))
-
-    # Step 5 — external pharmacy options
-    external = await _safe("step_5_external_pharmacy_options", get_external_pharmacy_options(ExternalPharmacyRequest(
-        medication_name=medication_name,
-        drug_id=drug_id,
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )))
+    # Steps 1–5 — run in parallel (no inter-step dependencies)
+    inventory, logistics, formulary, dose_variants, external = await asyncio.gather(
+        _safe("step_1_inventory", get_hardware_inventory(InventoryRequest(
+            medication_name_or_drug_id=drug_id,
+            job_id=job_id,
+            sharp_context_hash=sharp_hash,
+        ))),
+        _safe("step_2_logistics", get_logistics_estimate(LogisticsRequest(
+            drug_id=drug_id,
+            job_id=job_id,
+            sharp_context_hash=sharp_hash,
+        ))),
+        _safe("step_3_formulary_with_flags", get_formulary_alternatives(FormularyRequest(
+            drug_id=drug_id,
+            patient_id=req.patient_id,
+            job_id=job_id,
+            sharp_context_hash=sharp_hash,
+        ))),
+        _safe("step_4_dose_variants", get_dose_variants_tool(InventoryRequest(
+            medication_name_or_drug_id=drug_id,
+            job_id=job_id,
+            sharp_context_hash=sharp_hash,
+        ))),
+        _safe("step_5_external_pharmacy_options", get_external_pharmacy_options(ExternalPharmacyRequest(
+            medication_name=medication_name,
+            drug_id=drug_id,
+            job_id=job_id,
+            sharp_context_hash=sharp_hash,
+        ))),
+    )
 
     # Step 6 — replenishment flag (only when stock is low or out)
     replenishment = None
