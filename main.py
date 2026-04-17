@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import html
 import json
+from collections import Counter
 import logging
 import os
 import re
@@ -1868,8 +1869,6 @@ async def analytics_dashboard():
     Audience: Chief Pharmacist, hospital administrator.
     Distinct from /audit-dashboard (forensic/compliance tool).
     """
-    from collections import Counter
-
     # ── Aggregate from _audit_store ───────────────────────────────────────────
     total_jobs = len(_audit_store)
     total_tool_calls = sum(len(entries) for entries in _audit_store.values())
@@ -2056,8 +2055,8 @@ async def analytics_dashboard():
 <div class="grid-2">
   <div class="section">
     <div class="section-header">
-      Most Checked Drugs
-      <span class="section-sub">By prescription check volume</span>
+      Most Overridden Drugs
+      <span class="section-sub">Drugs most frequently dispensed despite safety flags</span>
     </div>
     <table>
       <thead><tr><th>Drug</th><th>Override Count</th><th>% of Overrides</th></tr></thead>
