@@ -1936,4 +1936,4 @@ def _patched_init_opts(notification_options=None, experimental_capabilities=None
     return result
 _mcp._mcp_server.create_initialization_options = _patched_init_opts
 
-app.mount("/mcp", _mcp.http_app(transport="sse"))
+app.mount("/mcp", _mcp.http_app(transport="streamable-http"))
