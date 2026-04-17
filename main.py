@@ -1245,10 +1245,17 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
             if f.get("severity") in ("CRITICAL", "HIGH")
         ))
         flag_summary = ", ".join(flag_types)
-        options.insert(0,
-            f"Option 0: {prescribed_name} - {stock_status} - {prescribed_wait}"
-            f" - \u26a0 OVERRIDE REQUIRED: {flag_summary} - Doctor must confirm override reason"
-        )
+        if stock_status == "OUT_OF_STOCK":
+            option_0 = (
+                f"Option 0: {prescribed_name} - OUT OF STOCK - Doctor insists"
+                f" - Patient must collect from external pharmacy (see last option)"
+            )
+        else:
+            option_0 = (
+                f"Option 0: {prescribed_name} - {stock_status} - {prescribed_wait}"
+                f" - \u26a0 OVERRIDE REQUIRED: {flag_summary} - Doctor must confirm override reason"
+            )
+        options.insert(0, option_0)
 
     # ── Recommendation ────────────────────────────────────────────────────────
     if recommended_idx is not None:
@@ -1301,11 +1308,19 @@ async def confirm_dispensing(req: ConfirmDispensingRequest):
     confirmation_id = f"conf-{uuid.uuid4().hex[:8]}"
     confirmed_at = datetime.now(timezone.utc).isoformat()
 
-    dispensing_instruction = (
-        f"Dispense {req.chosen_medication} to patient {req.patient_id}. Override confirmed by doctor."
-        if req.is_override
-        else f"Dispense {req.chosen_medication} to patient {req.patient_id}."
-    )
+    if req.chosen_option_number == 0 and req.is_override:
+        dispensing_instruction = (
+            "OUT OF STOCK \u2014 Patient directed to external pharmacy. "
+            "Doctor override logged for audit purposes."
+        )
+    elif req.is_override:
+        dispensing_instruction = (
+            f"Dispense {req.chosen_medication} to patient {req.patient_id}. Override confirmed by doctor."
+        )
+    else:
+        dispensing_instruction = (
+            f"Dispense {req.chosen_medication} to patient {req.patient_id}."
+        )
 
     result = {
         "confirmation_id": confirmation_id,
