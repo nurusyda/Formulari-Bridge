@@ -17,6 +17,7 @@ SYNTHETIC DATA ONLY — no real patient data.
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -1275,6 +1276,11 @@ async def confirm_dispensing(req: ConfirmDispensingRequest):
     If the doctor chose an option with safety flags (is_override=True),
     the confirmation is also recorded in the override store for dashboard display.
     """
+    if req.is_override and not req.override_reason.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="override_reason is required when is_override=True"
+        )
     confirmation_id = f"conf-{uuid.uuid4().hex[:8]}"
     confirmed_at = datetime.now(timezone.utc).isoformat()
 
@@ -1309,6 +1315,8 @@ async def confirm_dispensing(req: ConfirmDispensingRequest):
             "safety_flags_at_confirmation": req.safety_flags_present,
             "confirmed_at": confirmed_at,
         })
+        if len(_override_store) > 200:
+            _override_store.pop(0)
 
     log_audit(
         job_id=req.job_id,
@@ -1346,9 +1354,9 @@ async def audit_dashboard(job_id: str = Query(default="")):
             sig_preview = e.get("hmac_signature", "")[:16]
             rows += (
                 f"<tr>"
-                f"<td>{e.get('timestamp','')}</td>"
-                f"<td>{e.get('agent','')}</td>"
-                f"<td>{e.get('tool_called','')}</td>"
+                f"<td>{html.escape(e.get('timestamp',''))}</td>"
+                f"<td>{html.escape(e.get('agent',''))}</td>"
+                f"<td>{html.escape(e.get('tool_called',''))}</td>"
                 f"<td style='font-family:monospace'>{sig_preview}…</td>"
                 f"</tr>"
             )
@@ -1380,15 +1388,15 @@ async def audit_dashboard(job_id: str = Query(default="")):
     if filtered_overrides:
         override_rows = ""
         for o in reversed(filtered_overrides):
-            flags_text = "; ".join(o.get("safety_flags_at_confirmation", [])) or "—"
+            flags_text = html.escape("; ".join(o.get("safety_flags_at_confirmation", [])) or "—")
             override_rows += (
                 f"<tr>"
-                f"<td>{o.get('confirmed_at', '')}</td>"
-                f"<td style='font-family:monospace'>{o.get('job_id', '')}</td>"
-                f"<td>{o.get('patient_id', '')}</td>"
-                f"<td>{o.get('prescribed_medication', '')}</td>"
-                f"<td><strong>{o.get('chosen_medication', '')}</strong></td>"
-                f"<td style='color:#92400e'>{o.get('override_reason', '') or '—'}</td>"
+                f"<td>{html.escape(o.get('confirmed_at', ''))}</td>"
+                f"<td style='font-family:monospace'>{html.escape(o.get('job_id', ''))}</td>"
+                f"<td>{html.escape(o.get('patient_id', ''))}</td>"
+                f"<td>{html.escape(o.get('prescribed_medication', ''))}</td>"
+                f"<td><strong>{html.escape(o.get('chosen_medication', ''))}</strong></td>"
+                f"<td style='color:#92400e'>{html.escape(o.get('override_reason', '') or '—')}</td>"
                 f"<td style='font-size:0.8rem;color:#78350f'>{flags_text}</td>"
                 f"</tr>"
             )
@@ -1872,8 +1880,8 @@ async def getPharmacySummary_mcp(medication: str, patient_id: str, job_id: str =
     return await get_pharmacy_summary(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
 @_mcp.tool(description="Call this after doctor selects an option. Logs the dispensing decision to the audit trail. If doctor chose an option with safety flags, set is_override=true and include the flags in safety_flags_present. Parameters: job_id, patient_id, prescribed_medication, chosen_medication, chosen_option_number, safety_flags_present (list), is_override (bool), override_reason (str).")
-async def confirmDispensing_mcp(job_id: str, patient_id: str, prescribed_medication: str, chosen_medication: str, chosen_option_number: int, safety_flags_present: list[str] = [], is_override: bool = False, override_reason: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await confirm_dispensing(ConfirmDispensingRequest(job_id=job_id, patient_id=patient_id, prescribed_medication=prescribed_medication, chosen_medication=chosen_medication, chosen_option_number=chosen_option_number, safety_flags_present=safety_flags_present, is_override=is_override, override_reason=override_reason, sharp_context_hash=sharp_context_hash))
+async def confirmDispensing_mcp(job_id: str, patient_id: str, prescribed_medication: str, chosen_medication: str, chosen_option_number: int, safety_flags_present: list[str] | None = None, is_override: bool = False, override_reason: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
+    return await confirm_dispensing(ConfirmDispensingRequest(job_id=job_id, patient_id=patient_id, prescribed_medication=prescribed_medication, chosen_medication=chosen_medication, chosen_option_number=chosen_option_number, safety_flags_present=safety_flags_present or [], is_override=is_override, override_reason=override_reason, sharp_context_hash=sharp_context_hash))
 
 # Declare FHIR context extension capability in the MCP initialize response
 _orig_init_opts = _mcp._mcp_server.create_initialization_options
