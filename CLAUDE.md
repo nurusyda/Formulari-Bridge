@@ -115,6 +115,20 @@ Prompt Opinion's SSE client occasionally drops connections after ~25 seconds
 Fix: open a fresh session in Prompt Opinion. Works on retry every time.
 This is a Prompt Opinion platform behavior, not a server bug.
 
+## Analytics dashboard
+Route: /analytics
+Audience: Chief Pharmacist, Hospital Administrator
+Data sources: _audit_store + _override_store (both in-memory)
+Shows: prescription check volume, override rate by flag type,
+override reason distribution, most overridden drugs, tool call
+volume, activity by hour (UTC)
+IMPORTANT: data resets on every deploy. Populate by running
+tool calls before taking screenshots for demos or submissions.
+Quick populate via REST:
+  POST /tools/getPharmacySummary + POST /tools/confirmDispensing
+Distinct from /audit-dashboard (forensic/compliance tool).
+/analytics is operational intelligence — patterns across sessions.
+
 ## Environment variables (AWS EB)
 HMAC_SECRET — production HMAC signing key
 LOW_STOCK_THRESHOLD — default 10
