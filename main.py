@@ -1112,6 +1112,148 @@ async def classify_clinical_intent(req: ClassifyIntentRequest):
     return result
 
 
+# ─── TOOL 10: getPharmacySummary ─────────────────────────────────────────────
+
+@app.post("/tools/getPharmacySummary")
+async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
+    """
+    Runs runFullPharmacyCheck internally and returns a compact summary:
+    stock status, critical/high flags, ranked safe options, recommendation.
+    Target: under 800 bytes.
+    """
+    job_id = req.job_id or f"full-{uuid.uuid4().hex[:8]}"
+
+    full = await run_full_pharmacy_check(FullPharmacyCheckRequest(
+        medication=req.medication,
+        patient_id=req.patient_id,
+        job_id=job_id,
+        sharp_context_hash=req.sharp_context_hash,
+    ))
+
+    # ── Stock status ──────────────────────────────────────────────────────────
+    inventory = full.get("step_1_inventory", {})
+    stock_status = inventory.get("stock_status", "UNKNOWN")
+
+    # ── Critical flags (CRITICAL or HIGH only) ────────────────────────────────
+    formulary = full.get("step_3_formulary_with_flags", {})
+    primary_flags = formulary.get("primary_drug_flags", [])
+    critical_flags = [
+        f"{f['flag_type']}: {f['detail']}"
+        for f in primary_flags
+        if f.get("severity") in ("CRITICAL", "HIGH")
+    ]
+
+    # ── Build ranked options ──────────────────────────────────────────────────
+    def _wait_minutes(wait_str: str) -> int:
+        m = re.search(r"\d+", str(wait_str))
+        return int(m.group()) if m else 99
+
+    def _alt_sort_key(alt):
+        flags = alt.get("contraindication_flags", [])
+        has_critical = any(f["severity"] == "CRITICAL" for f in flags)
+        has_high = any(f["severity"] == "HIGH" for f in flags)
+        is_out = alt.get("current_stock", 0) == 0
+        is_low = 0 < alt.get("current_stock", 0) <= LOW_STOCK_THRESHOLD
+        wait = _wait_minutes(alt.get("estimated_wait_time", "99 min"))
+        return (int(has_critical), int(has_high), int(is_out), int(is_low), wait)
+
+    sorted_alts = sorted(formulary.get("alternatives", []), key=_alt_sort_key)
+
+    options: list[str] = []
+    recommended_idx: int | None = None
+
+    for i, alt in enumerate(sorted_alts, 1):
+        flags = alt.get("contraindication_flags", [])
+        high_flags = [f for f in flags if f["severity"] in ("CRITICAL", "HIGH")]
+        stock = alt.get("current_stock", 0)
+        stock_label = (
+            "OUT_OF_STOCK" if stock == 0
+            else "LOW" if stock <= LOW_STOCK_THRESHOLD
+            else "IN STOCK"
+        )
+        wait = alt.get("estimated_wait_time", "unknown")
+
+        if high_flags:
+            severities = [f["severity"] for f in high_flags]
+            top = "CRITICAL" if "CRITICAL" in severities else "HIGH"
+            flag_type = high_flags[0]["flag_type"]
+            safety = f"{top} {flag_type} flag - Pharmacist review required"
+        else:
+            safety = "No flags"
+
+        suffix = ""
+        if recommended_idx is None and not high_flags and stock > 0:
+            recommended_idx = i
+            suffix = " - RECOMMENDED"
+
+        options.append(
+            f"Option {i}: {alt['medication_name']} - {stock_label} - {wait} - {safety}{suffix}"
+        )
+
+    # Dose variants (always require prescriber confirmation)
+    dose_variants = full.get("step_4_dose_variants", {})
+    for vkey in ("lower_dose_variant", "higher_dose_variant"):
+        variant = dose_variants.get(vkey)
+        if variant:
+            vs = variant.get("current_stock", 0)
+            vs_label = (
+                "OUT_OF_STOCK" if vs == 0
+                else "LOW" if vs <= LOW_STOCK_THRESHOLD
+                else "IN STOCK"
+            )
+            n = len(options) + 1
+            options.append(
+                f"Option {n}: {variant['medication_name']} - {vs_label}"
+                f" - {variant.get('estimated_wait_time', 'unknown')}"
+                f" - Prescriber confirmation required"
+            )
+
+    # External pharmacies
+    ext_list = full.get("step_5_external_pharmacy_options", {}).get("external_options", [])
+    if ext_list:
+        n = len(options) + 1
+        in_stock = [p for p in ext_list if p.get("in_stock", False)]
+        shown = in_stock or ext_list[:3]
+        ext_str = ", ".join(
+            f"{p['name']} ({p.get('estimated_travel_time_minutes', '?')} min)"
+            for p in shown
+        )
+        options.append(f"Option {n}: External pharmacies - {ext_str}")
+
+    # ── Recommendation ────────────────────────────────────────────────────────
+    if recommended_idx is not None:
+        rec_name = sorted_alts[recommended_idx - 1]["medication_name"]
+        recommendation = (
+            f"Option {recommended_idx}: {rec_name} is the safest choice for this patient."
+        )
+    else:
+        recommendation = (
+            "No flag-free in-stock alternative found. Pharmacist review required before dispensing."
+        )
+
+    result = {
+        "medication": full.get("medication", req.medication),
+        "patient_id": req.patient_id,
+        "stock_status": stock_status,
+        "critical_flags": critical_flags,
+        "options": options,
+        "recommendation": recommendation,
+        "escalate_to_pharmacist": formulary.get("escalate_to_pharmacist", False),
+        "job_id": job_id,
+    }
+
+    log_audit(
+        job_id=job_id,
+        agent="Agent-A-ClinicalCopilot",
+        tool_called="getPharmacySummary",
+        sharp_context_hash=req.sharp_context_hash,
+        input_data={"medication": req.medication, "patient_id": req.patient_id},
+        output_data=result,
+    )
+
+    return result
+
+
 # ─── AUDIT DASHBOARD ─────────────────────────────────────────────────────────
 
 @app.get("/audit-dashboard", response_class=HTMLResponse)
@@ -1602,6 +1744,10 @@ async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str
 @_mcp.tool(description="DO NOT CALL DIRECTLY for drug name inputs (e.g. 'Amoxicillin + PAT-002') — use runFullPharmacyCheck_mcp instead. Only call this when the doctor provides a free-text clinical note with no drug name (e.g. 'patient needs antibiotic for UTI'). Reads the note, maps it to a drug_class_needed, then pass that to runFullPharmacyCheck_mcp.")
 async def classifyClinicalIntent_mcp(clinical_note: str, patient_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await classify_clinical_intent(ClassifyIntentRequest(clinical_note=clinical_note, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
+
+@_mcp.tool(description="PRIMARY TOOL — call this for every prescription check. Returns a compact pharmacy summary with stock status, safety flags, ranked options, and recommendation. Parameters: medication (drug name, e.g. Amoxicillin), patient_id (e.g. PAT-001).")
+async def getPharmacySummary_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
+    return await get_pharmacy_summary(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
 # Declare FHIR context extension capability in the MCP initialize response
 _orig_init_opts = _mcp._mcp_server.create_initialization_options

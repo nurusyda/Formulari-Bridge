@@ -24,3 +24,6 @@ Thumbs.db
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
 PAT-*.json
+
+# Claude
+.claude/settings.local.json
