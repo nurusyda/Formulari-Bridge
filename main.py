@@ -1499,7 +1499,10 @@ async def audit_dashboard(job_id: str = Query(default="")):
 </style>
 </head>
 <body>
-<h1>Formulari Bridge — Audit Dashboard</h1>
+<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
+  <h1>Formulari Bridge — Audit Dashboard</h1>
+  <a href="/analytics" style="font-size:0.8rem;color:#1D9E75;text-decoration:none;margin-left:16px">→ Analytics</a>
+</div>
 <p class="subtitle">HMAC-SHA256 signed audit trail &nbsp;|&nbsp; Synthetic data only</p>
 
 <form class="filter-bar" method="get" action="/audit-dashboard">
@@ -1846,6 +1849,246 @@ async def demo_full_scenario():
         "step_6_replenishment_alert": replenishment,
         "step_7_audit_trail": audit,
     }
+
+
+# ─── ANALYTICS ENDPOINT ───────────────────────────────────────────────────────
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_dashboard():
+    """
+    Operational intelligence dashboard.
+    Aggregates across _audit_store and _override_store to show:
+    - Total prescription checks
+    - Flag trigger rate by type
+    - Override rate by flag type
+    - Most checked drugs
+    - Busiest time windows
+    - Override reason distribution
+
+    Audience: Chief Pharmacist, hospital administrator.
+    Distinct from /audit-dashboard (forensic/compliance tool).
+    """
+    from collections import Counter
+
+    # ── Aggregate from _audit_store ───────────────────────────────────────────
+    total_jobs = len(_audit_store)
+    total_tool_calls = sum(len(entries) for entries in _audit_store.values())
+
+    prescription_checks = 0
+    hour_counter = Counter()
+    tool_counter = Counter()
+
+    for _, entries in _audit_store.items():
+        for entry in entries:
+            tool = entry.get("tool_called", "")
+            tool_counter[tool] += 1
+            if tool == "getPharmacySummary":
+                prescription_checks += 1
+            ts = entry.get("timestamp", "")
+            if ts:
+                try:
+                    hour = ts[11:13]
+                    hour_counter[hour] += 1
+                except Exception:
+                    pass
+
+    # ── Aggregate from _override_store ────────────────────────────────────────
+    total_overrides = len(_override_store)
+
+    flag_override_counter = Counter()
+    reason_counter = Counter()
+    drug_override_counter = Counter()
+
+    for o in _override_store:
+        reason = o.get("override_reason", "unknown")
+        reason_counter[reason] += 1
+        drug = o.get("prescribed_medication", "unknown")
+        drug_override_counter[drug] += 1
+        for flag in o.get("safety_flags_at_confirmation", []):
+            flag_type = flag.split(":")[0].strip() if ":" in flag else flag
+            flag_override_counter[flag_type] += 1
+
+    # ── Compute override rate ─────────────────────────────────────────────────
+    override_rate = (
+        f"{(total_overrides / prescription_checks * 100):.1f}%"
+        if prescription_checks > 0 else "N/A"
+    )
+
+    # ── Build HTML helpers ────────────────────────────────────────────────────
+    def stat_card(label, value, sublabel=""):
+        sub = f"<div class='stat-sub'>{html.escape(str(sublabel))}</div>" if sublabel else ""
+        return (
+            f"<div class='stat-card'>"
+            f"<div class='stat-value'>{html.escape(str(value))}</div>"
+            f"<div class='stat-label'>{html.escape(label)}</div>"
+            f"{sub}"
+            f"</div>"
+        )
+
+    def table_rows(counter, limit=10, pct_of=None):
+        rows = ""
+        total = sum(counter.values()) or 1
+        for item, count in counter.most_common(limit):
+            pct = (
+                f"{count / pct_of * 100:.1f}%" if pct_of and pct_of > 0
+                else f"{count / total * 100:.1f}%"
+            )
+            rows += (
+                f"<tr>"
+                f"<td>{html.escape(str(item))}</td>"
+                f"<td><strong>{count}</strong></td>"
+                f"<td style='color:#888'>{pct}</td>"
+                f"</tr>"
+            )
+        return rows or "<tr><td colspan='3' style='color:#888;padding:16px'>No data yet.</td></tr>"
+
+    def hour_bar_chart():
+        if not hour_counter:
+            return "<p style='color:#888;padding:16px'>No data yet.</p>"
+        max_val = max(hour_counter.values()) or 1
+        bars = ""
+        for h in sorted(hour_counter.keys()):
+            count = hour_counter[h]
+            pct = int(count / max_val * 100)
+            bars += (
+                f"<div class='bar-row'>"
+                f"<span class='bar-label'>{html.escape(h)}:00</span>"
+                f"<div class='bar-track'>"
+                f"<div class='bar-fill' style='width:{pct}%'></div>"
+                f"</div>"
+                f"<span class='bar-count'>{count}</span>"
+                f"</div>"
+            )
+        return f"<div class='bar-chart'>{bars}</div>"
+
+    # ── Assemble stats row ────────────────────────────────────────────────────
+    stats_html = (
+        stat_card("Prescription Checks", prescription_checks) +
+        stat_card("Override Decisions", total_overrides, f"Override rate: {override_rate}") +
+        stat_card("Total Tool Calls", total_tool_calls) +
+        stat_card("Active Job Sessions", total_jobs)
+    )
+
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Formulari Bridge — Analytics</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: system-ui, sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 24px; }}
+  h1 {{ color: #1D9E75; font-size: 1.5rem; margin-bottom: 4px; }}
+  .subtitle {{ color: #555; font-size: 0.875rem; margin-bottom: 24px; }}
+  .nav-link {{ font-size: 0.8rem; color: #1D9E75; text-decoration: none; margin-left: 16px; }}
+  .nav-link:hover {{ text-decoration: underline; }}
+  .stats-row {{ display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }}
+  .stat-card {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 16px 20px; flex: 1; min-width: 160px; }}
+  .stat-value {{ font-size: 2rem; font-weight: 700; color: #1D9E75; line-height: 1; }}
+  .stat-label {{ font-size: 0.8rem; color: #666; margin-top: 4px; text-transform: uppercase;
+                 letter-spacing: 0.05em; }}
+  .stat-sub {{ font-size: 0.75rem; color: #F59E0B; margin-top: 4px; font-weight: 600; }}
+  .section {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+              margin-bottom: 20px; overflow: hidden; }}
+  .section-header {{ background: #f4faf8; border-bottom: 1px solid #e0e0e0;
+                     padding: 12px 16px; font-weight: 600; font-size: 0.9rem; color: #1a1a1a; }}
+  .section-sub {{ font-size: 0.75rem; color: #888; font-weight: 400; margin-left: 8px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
+  thead tr {{ background: #1D9E75; color: #fff; }}
+  th {{ padding: 8px 12px; text-align: left; font-weight: 600; }}
+  td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
+  tr:last-child td {{ border-bottom: none; }}
+  tbody tr:hover {{ background: #f9fffe; }}
+  .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
+  .bar-chart {{ padding: 12px 16px; }}
+  .bar-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.8rem; }}
+  .bar-label {{ width: 48px; color: #555; text-align: right; flex-shrink: 0; }}
+  .bar-track {{ flex: 1; background: #f0f0f0; border-radius: 3px; height: 16px; overflow: hidden; }}
+  .bar-fill {{ height: 100%; background: #1D9E75; border-radius: 3px;
+               transition: width 0.3s ease; min-width: 2px; }}
+  .bar-count {{ width: 32px; color: #888; font-size: 0.75rem; }}
+  .override-highlight {{ background: #fffbeb; border-color: #F59E0B; }}
+  .override-highlight .section-header {{ background: #fffbeb; border-color: #F59E0B; color: #92400e; }}
+  .override-highlight thead tr {{ background: #F59E0B; }}
+  @media (max-width: 640px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
+</style>
+</head>
+<body>
+<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
+  <h1>Formulari Bridge — Operational Intelligence</h1>
+  <a href="/audit-dashboard" class="nav-link">→ Audit Dashboard</a>
+</div>
+<p class="subtitle">
+  Aggregated across all sessions &nbsp;|&nbsp;
+  Synthetic data only &nbsp;|&nbsp;
+  Audience: Chief Pharmacist, Hospital Administrator
+</p>
+
+<div class="stats-row">
+  {stats_html}
+</div>
+
+<div class="grid-2">
+  <div class="section override-highlight">
+    <div class="section-header">
+      &#9888; Override Rate by Flag Type
+      <span class="section-sub">Which safety flags get overridden most?</span>
+    </div>
+    <table>
+      <thead><tr><th>Flag Type</th><th>Overrides</th><th>% of Total</th></tr></thead>
+      <tbody>{table_rows(flag_override_counter, pct_of=total_overrides)}</tbody>
+    </table>
+  </div>
+
+  <div class="section override-highlight">
+    <div class="section-header">
+      &#9888; Override Reason Distribution
+      <span class="section-sub">Why doctors override flags</span>
+    </div>
+    <table>
+      <thead><tr><th>Reason</th><th>Count</th><th>% of Overrides</th></tr></thead>
+      <tbody>{table_rows(reason_counter, pct_of=total_overrides)}</tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="section">
+    <div class="section-header">
+      Most Checked Drugs
+      <span class="section-sub">By prescription check volume</span>
+    </div>
+    <table>
+      <thead><tr><th>Drug</th><th>Override Count</th><th>% of Overrides</th></tr></thead>
+      <tbody>{table_rows(drug_override_counter, pct_of=total_overrides)}</tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      Tool Call Volume
+      <span class="section-sub">Which tools fire most</span>
+    </div>
+    <table>
+      <thead><tr><th>Tool</th><th>Calls</th><th>% of Total</th></tr></thead>
+      <tbody>{table_rows(tool_counter)}</tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    Activity by Hour (UTC)
+    <span class="section-sub">Tool call volume — identifies peak prescription windows</span>
+  </div>
+  {hour_bar_chart()}
+</div>
+
+</body>
+</html>"""
+
+    return HTMLResponse(content=page)
 
 
 # ─── MCP PROTOCOL ENDPOINT ────────────────────────────────────────────────────
