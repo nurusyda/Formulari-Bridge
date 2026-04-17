@@ -26,4 +26,4 @@ Thumbs.db
 PAT-*.json
 
 # Claude
-.claude/settings.local.json
+.claude/*.local.json

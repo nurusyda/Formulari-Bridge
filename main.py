@@ -123,6 +123,7 @@ def resolve_drug_query(*candidates: str) -> str:
 # ─── AUDIT LOG ────────────────────────────────────────────────────────────────
 
 _audit_store: dict[str, list[dict]] = {}
+_override_store: list[dict] = []   # dispensing confirmations with is_override=True
 
 def _hmac_sign(payload: str) -> str:
     return hmac.new(
@@ -584,6 +585,17 @@ class ClassifyIntentRequest(BaseModel):
     clinical_note: str
     patient_id: str = ""
     job_id: str = ""
+    sharp_context_hash: str = "no-patient-context"
+
+class ConfirmDispensingRequest(BaseModel):
+    job_id: str
+    patient_id: str
+    prescribed_medication: str
+    chosen_medication: str
+    chosen_option_number: int
+    safety_flags_present: list[str] = []
+    is_override: bool = False
+    override_reason: str = ""
     sharp_context_hash: str = "no-patient-context"
 
 
@@ -1150,8 +1162,8 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
 
     def _alt_sort_key(alt):
         flags = alt.get("contraindication_flags", [])
-        has_critical = any(f["severity"] == "CRITICAL" for f in flags)
-        has_high = any(f["severity"] == "HIGH" for f in flags)
+        has_critical = any(f.get("severity") == "CRITICAL" for f in flags)
+        has_high = any(f.get("severity") == "HIGH" for f in flags)
         is_out = alt.get("current_stock", 0) == 0
         is_low = 0 < alt.get("current_stock", 0) <= LOW_STOCK_THRESHOLD
         wait = _wait_minutes(alt.get("estimated_wait_time", "99 min"))
@@ -1215,7 +1227,7 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
         in_stock = [p for p in ext_list if p.get("in_stock", False)]
         shown = in_stock or ext_list[:3]
         ext_str = ", ".join(
-            f"{p['name']} ({p.get('walking_minutes', '?')} min walk)"
+            f"{p.get('name', 'Unknown')} ({p.get('walking_minutes', '?')} min walk)"
             for p in shown
         )
         options.append(f"Option {n}: External pharmacies - {ext_str}")
@@ -1248,6 +1260,68 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
         tool_called="getPharmacySummary",
         sharp_context_hash=req.sharp_context_hash,
         input_data={"medication": req.medication, "patient_id": req.patient_id},
+        output_data=result,
+    )
+
+    return result
+
+
+# ─── TOOL 11: confirmDispensing ──────────────────────────────────────────────
+
+@app.post("/tools/confirmDispensing")
+async def confirm_dispensing(req: ConfirmDispensingRequest):
+    """
+    Logs the doctor's final dispensing decision to the audit trail.
+    If the doctor chose an option with safety flags (is_override=True),
+    the confirmation is also recorded in the override store for dashboard display.
+    """
+    confirmation_id = f"conf-{uuid.uuid4().hex[:8]}"
+    confirmed_at = datetime.now(timezone.utc).isoformat()
+
+    dispensing_instruction = (
+        f"Dispense {req.chosen_medication} to patient {req.patient_id}. Override confirmed by doctor."
+        if req.is_override
+        else f"Dispense {req.chosen_medication} to patient {req.patient_id}."
+    )
+
+    result = {
+        "confirmation_id": confirmation_id,
+        "job_id": req.job_id,
+        "patient_id": req.patient_id,
+        "prescribed_medication": req.prescribed_medication,
+        "chosen_medication": req.chosen_medication,
+        "is_override": req.is_override,
+        "override_reason": req.override_reason,
+        "safety_flags_at_confirmation": req.safety_flags_present,
+        "confirmed_at": confirmed_at,
+        "audit_logged": True,
+        "dispensing_instruction": dispensing_instruction,
+    }
+
+    if req.is_override:
+        _override_store.append({
+            "confirmation_id": confirmation_id,
+            "job_id": req.job_id,
+            "patient_id": req.patient_id,
+            "prescribed_medication": req.prescribed_medication,
+            "chosen_medication": req.chosen_medication,
+            "override_reason": req.override_reason,
+            "safety_flags_at_confirmation": req.safety_flags_present,
+            "confirmed_at": confirmed_at,
+        })
+
+    log_audit(
+        job_id=req.job_id,
+        agent="Agent-A-ClinicalCopilot",
+        tool_called="confirmDispensing",
+        sharp_context_hash=req.sharp_context_hash,
+        input_data={
+            "patient_id": req.patient_id,
+            "prescribed_medication": req.prescribed_medication,
+            "chosen_medication": req.chosen_medication,
+            "chosen_option_number": req.chosen_option_number,
+            "is_override": req.is_override,
+        },
         output_data=result,
     )
 
@@ -1298,7 +1372,45 @@ async def audit_dashboard(job_id: str = Query(default="")):
             f"</div>"
         )
 
-    # Determine which jobs to show
+    # ── Override decisions section ────────────────────────────────────────────
+    filtered_overrides = (
+        [o for o in _override_store if o["job_id"] == job_id]
+        if job_id else _override_store[-20:]
+    )
+    if filtered_overrides:
+        override_rows = ""
+        for o in reversed(filtered_overrides):
+            flags_text = "; ".join(o.get("safety_flags_at_confirmation", [])) or "—"
+            override_rows += (
+                f"<tr>"
+                f"<td>{o.get('confirmed_at', '')}</td>"
+                f"<td style='font-family:monospace'>{o.get('job_id', '')}</td>"
+                f"<td>{o.get('patient_id', '')}</td>"
+                f"<td>{o.get('prescribed_medication', '')}</td>"
+                f"<td><strong>{o.get('chosen_medication', '')}</strong></td>"
+                f"<td style='color:#92400e'>{o.get('override_reason', '') or '—'}</td>"
+                f"<td style='font-size:0.8rem;color:#78350f'>{flags_text}</td>"
+                f"</tr>"
+            )
+        overrides_html = (
+            f"<div class='override-card'>"
+            f"<div class='override-header'>"
+            f"<span>&#9888; Override Decisions — Doctor confirmed dispensing despite safety flags</span>"
+            f"<span class='meta'>{len(filtered_overrides)} override(s)</span>"
+            f"</div>"
+            f"<table>"
+            f"<thead><tr>"
+            f"<th>Confirmed At</th><th>Job ID</th><th>Patient</th>"
+            f"<th>Prescribed</th><th>Dispensed</th><th>Override Reason</th><th>Flags Present</th>"
+            f"</tr></thead>"
+            f"<tbody>{override_rows}</tbody>"
+            f"</table>"
+            f"</div>"
+        )
+    else:
+        overrides_html = ""
+
+    # ── Audit trail jobs section ───────────────────────────────────────────────
     if job_id:
         entries = _audit_store.get(job_id, [])
         jobs_html = _job_section(job_id, entries)
@@ -1342,6 +1454,14 @@ async def audit_dashboard(job_id: str = Query(default="")):
   .filter-bar button {{ background: #1D9E75; color: #fff; border: none; border-radius: 4px;
                         padding: 6px 14px; font-size: 0.875rem; cursor: pointer; }}
   .filter-bar button:hover {{ background: #178a63; }}
+  .override-card {{ border: 1px solid #F59E0B; border-radius: 8px; margin-bottom: 28px; overflow: hidden; }}
+  .override-header {{ background: #fffbeb; border-bottom: 1px solid #F59E0B; padding: 12px 16px;
+                      display: flex; align-items: center; justify-content: space-between;
+                      font-weight: 600; color: #92400e; font-size: 0.9rem; gap: 16px; }}
+  .override-card table thead tr {{ background: #F59E0B; color: #fff; }}
+  .override-card tbody tr:hover {{ background: #fffdf0; }}
+  .section-label {{ font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em;
+                    text-transform: uppercase; color: #888; margin: 24px 0 10px; }}
 </style>
 </head>
 <body>
@@ -1354,6 +1474,8 @@ async def audit_dashboard(job_id: str = Query(default="")):
   {"<a href='/audit-dashboard' style='font-size:0.875rem;color:#1D9E75;text-decoration:none'>Clear</a>" if job_id else ""}
 </form>
 
+{f'<p class="section-label">Override Decisions</p>{overrides_html}' if overrides_html else ""}
+{"<p class='section-label'>Audit Trail</p>" if overrides_html else ""}
 {jobs_html}
 </body>
 </html>"""
@@ -1737,7 +1859,7 @@ async def getExternalPharmacyOptions_mcp(medication_name: str, drug_id: str = ""
 async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
     return await get_audit_trace(AuditRequest(job_id=job_id, session_token=session_token))
 
-@_mcp.tool(description="PRIMARY TOOL — call this first whenever you have a drug name or drug ID and a patient_id. Runs the complete pharmacy workflow in one call: inventory, logistics, formulary alternatives with contraindication flags, dose variants, and external pharmacy options. Use this for inputs like 'Amoxicillin + PAT-002'. Parameters: medication (drug name or ID), patient_id (e.g. PAT-001).")
+@_mcp.tool(description="Full detailed pharmacy check — returns complete step-by-step data including inventory, logistics, formulary alternatives, dose variants, and audit trail. Use getPharmacySummary_mcp for compact responses. Parameters: medication (drug name or ID), patient_id (e.g. PAT-001).")
 async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await run_full_pharmacy_check(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
@@ -1745,9 +1867,13 @@ async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str
 async def classifyClinicalIntent_mcp(clinical_note: str, patient_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await classify_clinical_intent(ClassifyIntentRequest(clinical_note=clinical_note, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
 
-@_mcp.tool(description="PRIMARY TOOL — call this for every prescription check. Returns a compact pharmacy summary with stock status, safety flags, ranked options, and recommendation. Parameters: medication (drug name, e.g. Amoxicillin), patient_id (e.g. PAT-001).")
+@_mcp.tool(description="RECOMMENDED — call this for every prescription check. Returns compact pharmacy summary with stock status, safety flags, ranked options, and recommendation. Use runFullPharmacyCheck_mcp if you need full detailed step-by-step data. Parameters: medication (drug name, e.g. Amoxicillin), patient_id (e.g. PAT-001).")
 async def getPharmacySummary_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
     return await get_pharmacy_summary(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
+
+@_mcp.tool(description="Call this after doctor selects an option. Logs the dispensing decision to the audit trail. If doctor chose an option with safety flags, set is_override=true and include the flags in safety_flags_present. Parameters: job_id, patient_id, prescribed_medication, chosen_medication, chosen_option_number, safety_flags_present (list), is_override (bool), override_reason (str).")
+async def confirmDispensing_mcp(job_id: str, patient_id: str, prescribed_medication: str, chosen_medication: str, chosen_option_number: int, safety_flags_present: list[str] = [], is_override: bool = False, override_reason: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
+    return await confirm_dispensing(ConfirmDispensingRequest(job_id=job_id, patient_id=patient_id, prescribed_medication=prescribed_medication, chosen_medication=chosen_medication, chosen_option_number=chosen_option_number, safety_flags_present=safety_flags_present, is_override=is_override, override_reason=override_reason, sharp_context_hash=sharp_context_hash))
 
 # Declare FHIR context extension capability in the MCP initialize response
 _orig_init_opts = _mcp._mcp_server.create_initialization_options
