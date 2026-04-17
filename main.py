@@ -1215,7 +1215,7 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
         in_stock = [p for p in ext_list if p.get("in_stock", False)]
         shown = in_stock or ext_list[:3]
         ext_str = ", ".join(
-            f"{p['name']} ({p.get('estimated_travel_time_minutes', '?')} min)"
+            f"{p['name']} ({p.get('walking_minutes', '?')} min walk)"
             for p in shown
         )
         options.append(f"Option {n}: External pharmacies - {ext_str}")
