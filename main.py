@@ -1241,7 +1241,7 @@ async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
         prescribed_name = full.get("medication", req.medication)
         prescribed_wait = full.get("step_2_logistics", {}).get("estimated_wait_time", "unknown")
         flag_types = list(dict.fromkeys(
-            f["flag_type"] for f in primary_flags
+            f.get("flag_type", "UNKNOWN") for f in primary_flags
             if f.get("severity") in ("CRITICAL", "HIGH")
         ))
         flag_summary = ", ".join(flag_types)
