@@ -1,362 +1,311 @@
-# Formulari Bridge 🏥
+# Formulari Bridge 💊
 
-> **Clinical intent to pharmacy reality — an AI-powered prescription safety system that eliminates the pharmacist-doctor phone tag loop.**
+> **AI-assisted pharmacy orchestration that catches dangerous drug substitutions before they reach the patient.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude%20Sonnet-blueviolet?logo=anthropic)](https://www.anthropic.com/)
-[![FHIR R4](https://img.shields.io/badge/FHIR-R4%20Compliant-blue)](https://hl7.org/fhir/R4/)
-[![HIPAA](https://img.shields.io/badge/SHARP-HIPAA%20Audit%20Ready-green)](https://www.hhs.gov/hipaa/)
-[![Open Source](https://img.shields.io/badge/Open%20Source-github.com%2Fnurusyda-black?logo=github)](https://github.com/nurusyda/Formulari-Bridge)
+[![Powered by Prompt Opinion](https://img.shields.io/badge/Powered%20by-Prompt%20Opinion%20A2A-blue)](https://promptopinion.ai)
+[![FHIR R4](https://img.shields.io/badge/FHIR-R4%20Compliant-orange)](https://hl7.org/fhir/R4/)
+[![Deployed on AWS](https://img.shields.io/badge/Deployed%20on-AWS%20Elastic%20Beanstalk-orange?logo=amazonaws)](https://aws.amazon.com/elasticbeanstalk/)
 
 <p align="center">
-  <a href="https://github.com/nurusyda/Formulari-Bridge">
-    <img src="https://img.shields.io/badge/View%20on%20GitHub%20%F0%9F%8F%A5-teal?style=for-the-badge&logo=github&logoColor=white" alt="GitHub">
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/health">
+    <img src="https://img.shields.io/badge/Live%20Server%20%F0%9F%9F%A2-green?style=for-the-badge" alt="Live Server">
+  </a>
+  &nbsp;
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/audit-dashboard">
+    <img src="https://img.shields.io/badge/Audit%20Dashboard-1D9E75?style=for-the-badge" alt="Audit Dashboard">
+  </a>
+  &nbsp;
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/analytics">
+    <img src="https://img.shields.io/badge/Analytics-F59E0B?style=for-the-badge" alt="Analytics">
   </a>
 </p>
 
-Every day, a pharmacist discovers a prescribed drug is out of stock. They call the doctor. The doctor is with another patient. The patient waits. Hours pass. Sometimes nothing gets resolved at all.
-
-**Formulari Bridge** intercepts this at the point of prescription — before the patient ever reaches the pharmacy counter. The doctor sees real-time stock, ranked safe alternatives, and safety flags in the same workflow where they write the prescription. One confirmation. Three seconds. Done.
+Built for the **Agents Assemble: Healthcare AI Endgame Hackathon** hosted by Prompt Opinion × Darena Health.
 
 ---
 
-## 🧭 Why This Exists
+## The problem
 
-Drug-related harm costs **$528 billion annually** in the US alone (ASHP, 2022). A significant share of this is preventable — wrong drug, wrong dose, stock mismatch, allergy oversight — problems that compound when pharmacists and doctors communicate by phone tag across siloed systems.
+Every day, doctors prescribe medications that are out of stock. The current process is manual and slow — pharmacist calls doctor, doctor thinks of an alternative, pharmacist checks stock, repeat. This loop takes **15–45 minutes** while the patient waits.
 
-I built this because the back-and-forth is not a people problem. It's an architecture problem. The pharmacist knows the stock. The doctor knows the patient. Neither has the other's information at the moment decisions are made.
+Wrong substitution decisions cause ADEs (adverse drug events). A 2018 study estimated the annual cost of prescription drug-related morbidity and mortality in the US at **$528 billion**.
 
-Formulari Bridge puts both in the same loop — at the right time, with the right safety checks hardcoded in.
-
----
-
-## ✨ What It Does
-
-- **Real-time stock check** — prescription is validated against live pharmacy inventory the moment it's written
-- **Safe alternative ranking** — out-of-stock drugs surface ranked alternatives with wait times and stock status
-- **Hardcoded safety rules** — 9 clinical contraindication rules fire before the LLM sees anything
-- **Override gates** — doctors can override flags, but must select a reason; every override is logged
-- **HMAC audit trail** — cryptographically signed log of every decision, every override, every reason
-- **Analytics dashboard** — override patterns, flag distribution, tool call volume for Chief Pharmacist review
-- **Patient wait time** — estimated pickup time communicated before patient leaves the consultation room
+The problem isn't that pharmacists don't know — it's that they don't always have the right patient context at the moment they need it.
 
 ---
 
-## 🔬 Live Demo Walkthrough
+## What Formulari Bridge does
 
-**Patient:** Maria Santos (DOB: 1978-11-22) — documented severe penicillin allergy, reaction: anaphylaxis.
+Formulari Bridge intercepts the substitution decision and makes it safer, faster, and fully auditable.
 
-**Prescribed:** Amoxicillin 500mg — a penicillin. Also out of stock.
+A doctor types a drug name and patient ID. Within **one second**, the system:
 
-Two flags fire simultaneously:
+- Checks real-time ADC inventory
+- Runs **9 hardcoded contraindication rules** against the patient's FHIR record
+- Ranks alternatives from safest to least safe for this specific patient
+- Presents a structured decision to the doctor
+- Requires explicit confirmation with an audit trail entry
+- Requires a **stated reason for any override** of a safety flag
 
-```
-⛔ OUT OF STOCK
-⚠ DIRECT_ALLERGY: Patient has documented Severe allergy to Penicillin. Reaction: Anaphylaxis.
-```
-
-System presents ranked options:
-
-```
-Option 1: Azithromycin 250mg Tablet     — IN STOCK — 12 min — No flags       ✅ RECOMMENDED
-Option 2: Cephalexin 500mg Capsule      — IN STOCK — 15 min — HIGH CROSS_REACTIVITY flag
-Option 3: Amoxicillin 250mg Capsule     — IN STOCK — 10 min — Prescriber confirmation required
-Option 5: External pharmacies           — MedPlus (4 min walk), Guardian (9 min), Unity (13 min)
-```
-
-Doctor overrides to Cephalexin (Option 2). System does not silently allow it:
-
-```
-⚠ OVERRIDE CONFIRMATION REQUIRED
-You selected Cephalexin 500mg despite active safety flag(s):
-  ⚠ DIRECT_ALLERGY — Severe penicillin allergy on record
-  ⚠ HIGH CROSS_REACTIVITY — Cephalosporins share ~1-2% cross-reactivity with penicillin
-
-Select reason:
-[A] Clinical judgment — benefit outweighs risk
-[B] Patient cleared by specialist
-[C] Flag not applicable — context has changed
-[D] System suggestion incorrect
-```
-
-Doctor selects A. Result:
-
-```
-✅ DISPENSING CONFIRMED
-Override logged. Reason: Clinical judgment: benefit outweighs risk
-Audit trail updated. Pharmacist notified.
-```
-
-Two contraindication flags on one patient. Both caught. Override gated. Decision traceable.
+**The doctor decides. The system never auto-approves.**
 
 ---
 
-## 🏗️ Architecture
+## Agent architecture
 
 ```
-[Doctor's Workstation]
-        |
-        | Prescription Input (natural language or structured)
-        ↓
-[Classifier Agent — Agent A]
-        |
-        └── Interprets clinical intent
-            "ear infection, 3 days, no allergies" → drug class + dosage parameters
-        |
-        ↓
-[Formulary Lookup Agent — Agent B]
-        |
-        ├── getHardwareInventory       → live stock levels
-        ├── getFormularyAlternatives   → ranked substitutes
-        ├── getDoseVariants            → same drug, different strengths
-        ├── getExternalPharmacyOptions → nearby alternatives with walk times
-        └── getLogisticsEstimate       → wait time per option
-        |
-        ↓
-[Safety & Confirmation Agent — Agent C]
-        |
-        ├── run_contraindication_rules()   ← HARDCODED — not LLM
-        │     Rule 1: Direct allergy match
-        │     Rule 2: Penicillin → Cephalosporin cross-reactivity
-        │     Rule 3: Macrolide + warfarin interaction
-        │     Rule 4: QT prolongation risk
-        │     Rule 5: Renal dose adjustment (CrCl < 50)
-        │     Rule 6: Metformin CrCl safety check
-        │     Rule 7: Therapeutic duplication
-        │     Rule 8: NSAID in renal impairment
-        │     Rule 9: BX-coded substitution confirmation
-        │
-        ├── flagLowStockReplenishment  → alerts pharmacy ops
-        ├── getPharmacySummary         → patient-facing wait time
-        └── confirmDispensing          → final gate with override logging
-        |
-        ↓
-[HMAC Audit Logger]
-        |
-        └── Every decision cryptographically signed → Audit dashboard
+Doctor message
+      │
+      ▼
+Agent A — Clinical Receptionist (Orchestrator)
+      │
+      ├── getPharmacySummary_mcp ──► Rules Engine ──► Contraindication flags
+      │         └── 7-step parallel workflow (inventory, logistics,
+      │               formulary, dose variants, external pharmacy,
+      │               replenishment, audit)
+      │
+      ├── [consults] Agent 0 — Clinical Classifier
+      │         └── classifyClinicalIntent_mcp (GPT-4o, 25 few-shot examples)
+      │               Only fires when doctor writes a clinical note
+      │               instead of naming a drug
+      │
+      ├── [consults] Agent B — Hardware Sentinel
+      │         └── runFullPharmacyCheck_mcp (full raw data)
+      │
+      └── [consults] Agent C — Clinical Synthesiser
+                └── No tools — explains flags in plain English
+                      Never invents flags. Only explains what rules engine returns.
+      │
+      ▼
+confirmDispensing_mcp ──► HMAC audit trail + override store
 ```
-
-### The Safety Model
-
-Safety flags come exclusively from the hardcoded rules engine. **The LLM explains them — it never invents them.** This distinction matters for clinical accountability.
-
-```python
-# ——— RULES ENGINE ———————————————————————————————
-# This is the safety-critical layer. Flags come from here.
-# The LLM (Agent C) explains these flags — it never invents them.
-
-# Rule 1: Direct allergy match
-# Rule 2: Penicillin → Cephalosporin cross-reactivity
-# Rule 3: Macrolide + warfarin interaction
-# Rule 4: QT prolongation risk
-# Rule 5: Renal dose adjustment
-# Rule 6: Metformin CrCl safety check
-# Rule 7: Therapeutic duplication
-# Rule 8: NSAID in renal impairment
-# Rule 9: BX-coded substitution
-```
-
-Every override requires a reason. Every reason is logged. Every log is HMAC-signed.
 
 ---
 
-## 📊 Analytics Dashboard
-
-The operational intelligence dashboard surfaces patterns that matter to hospital pharmacists and administrators:
-
-| Metric | What It Shows |
-|---|---|
-| Override Rate by Flag Type | Which safety flags doctors override most — and why |
-| Override Reason Distribution | Clinical judgment vs. specialist clearance vs. system error |
-| Most Overridden Drugs | Drugs frequently dispensed despite flags — possible formulary gap |
-| Tool Call Volume | Which system tools fire most — operational load visibility |
-| Activity by Hour (UTC) | Peak prescription windows for staffing decisions |
-
-Every override is a data point. Aggregate patterns reveal formulary gaps, clinical workflow friction, and safety blind spots that individual incident reviews miss.
-
----
-
-## 🛡️ Security & Compliance
+## Safety model
 
 | Layer | Implementation |
 |---|---|
-| **HMAC Audit Trail** | Cryptographically signed logs for every prescription decision |
-| **Override Logging** | Every override requires a reason; logged with job ID and timestamp |
-| **FHIR R4 Compliant** | Full interoperability with modern healthcare data standards |
-| **SHARP Extension** | Security, HIPAA, Audit, Risk, and Privacy framework built-in |
-| **On-Premise Option** | Clinical LLM per hospital region — patient data never leaves the building |
-| **Encrypted Channels** | Internal system communication over encrypted channels only |
-| **Least-Privilege Design** | Each agent scoped to minimum required tool access |
-
-### Privacy-First Architecture
-
-```
-LAYER 5 — Private    Patient data never leaves the building
-LAYER 4 — Secure     Encrypted channels between internal systems
-LAYER 3 — Clinical   Clinical workflows processed on-premise
-LAYER 2 — Regional   LLM deployment per hospital network
-LAYER 1 — Hospital   Data stays within hospital building perimeter
-```
+| **Contraindication flags** | 9 hardcoded rules — never delegated to LLM |
+| **Doctor always confirms** | No auto-approval anywhere in the system |
+| **Override requires reason** | A/B/C/D reason codes, logged to audit trail |
+| **HMAC-SHA256 audit trail** | Every tool call signed — tamper-evident |
+| **No raw PHI to LLM** | SHARP context extension propagates patient context |
+| **FHIR R4 compliant** | Self-hosted synthetic patient bundles |
+| **Override analytics** | Patterns visible to Chief Pharmacist via `/analytics` |
 
 ---
 
-## 🧰 Tech Stack
+## The 9 contraindication rules
 
-```
-Agent Framework    : 3 coordinated AI agents (Classifier, Lookup, Safety)
-Protocol           : MCP (Model Context Protocol) — 8 clinical tools
-LLM                : Claude Sonnet (Anthropic)
-Safety Engine      : Hardcoded Python rules — no LLM involvement
-Audit              : HMAC-signed cryptographic log chain
-Standards          : FHIR R4, SHARP extension
-Analytics          : Operational intelligence dashboard
-Deployment         : On-premise per hospital region
-```
+1. Direct allergy match → `CRITICAL`
+2. Penicillin → Cephalosporin cross-reactivity → `HIGH` if anaphylaxis history
+3. Macrolide + warfarin CYP3A4 interaction → `HIGH`
+4. QT prolongation risk (QTc > 460ms or amiodarone present) → `HIGH`
+5. Renal dose adjustment CrCl < 50 → `MODERATE` / `CRITICAL`
+6. Metformin CrCl < 45 contraindication → `HIGH` / `CRITICAL`
+7. Therapeutic duplication → `MODERATE`
+8. NSAID in renal impairment CrCl < 60 → `MODERATE` / `HIGH`
+9. BX-coded non-equivalent substitution → `MODERATE`
 
 ---
 
-## ⚙️ MCP Tools
+## Demo scenarios
 
-| Tool | Function |
+### Scenario 1 — Allergy detection (PAT-002)
+
+Amoxicillin 500mg prescribed for Maria Santos, documented penicillin anaphylaxis.
+
+```
+FORMULARI BRIDGE — PRESCRIPTION CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Patient ID:  PAT-002
+Prescribed:  Amoxicillin 500mg Capsule
+Status:      ⛔ OUT OF STOCK
+
+SAFETY FLAGS:
+⚠ DIRECT_ALLERGY: Patient has documented Severe allergy to Penicillin.
+  Reaction: Anaphylaxis.
+
+OPTIONS:
+Option 0: Amoxicillin 500mg - OUT OF STOCK - Doctor insists
+          → Patient directed to external pharmacy
+Option 1: Azithromycin 250mg - IN STOCK - 12 min - No flags ✅ RECOMMENDED
+Option 2: Cephalexin 500mg   - IN STOCK - 15 min - HIGH CROSS_REACTIVITY
+Option 5: External pharmacies - MedPlus (4 min walk), Guardian (9 min walk)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Doctor selects Option 2 (flagged) → override menu appears → doctor selects reason B → dispensing confirmed, override logged.
+
+### Scenario 2 — Polypharmacy complexity (PAT-005)
+
+Azithromycin 250mg prescribed for David Mensah, 81. CKD Stage 4, QTc 462ms, on Warfarin + Amiodarone.
+
+Two simultaneous flags fire:
+- **QT_PROLONGATION [HIGH]** — triple additive risk (drug + QTc + amiodarone)
+- **DRUG_INTERACTION [HIGH]** — CYP3A4 inhibition increases warfarin levels
+
+Doxycycline shown as safer. Doctor confirms. System never decides.
+
+---
+
+## 11 MCP tools
+
+| Tool | Purpose |
 |---|---|
-| `getHardwareInventory` | Live stock levels per drug |
-| `getLogisticsEstimate` | Estimated wait time per option |
-| `getFormularyAlternatives` | Ranked safe substitutes |
-| `getDoseVariants` | Same drug, different strengths/forms |
-| `getExternalPharmacyOptions` | Nearby pharmacies with walk times |
-| `flagLowStockReplenishment` | Alert pharmacy operations |
-| `getPharmacySummary` | Patient-facing pickup summary |
-| `confirmDispensing` | Final dispensing gate with override logging |
+| `getPharmacySummary_mcp` | **PRIMARY** — compact ~800 byte response for Agent A |
+| `runFullPharmacyCheck_mcp` | Full 7-step detailed response |
+| `getHardwareInventory_mcp` | ADC stock level, machine location, expiry |
+| `getLogisticsEstimate_mcp` | Queue depth, wait time, stockout projection |
+| `getFormularyAlternatives_mcp` | Alternatives with contraindication flags |
+| `getDoseVariants_mcp` | Lower/higher dose variants (always need prescriber confirmation) |
+| `flagLowStockReplenishment_mcp` | Reorder recommendation — never automatic |
+| `getExternalPharmacyOptions_mcp` | Nearby external pharmacies with walking distance |
+| `getAuditTrace_mcp` | HMAC-SHA256 tamper-evident audit trail |
+| `classifyClinicalIntent_mcp` | GPT-4o clinical note classifier — Agent 0 only |
+| `confirmDispensing_mcp` | Logs final dispensing decision + override reason |
 
 ---
 
-## 🚀 Quick Start
+## Live endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| [`/health`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/health) | Server status |
+| [`/docs`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/docs) | FastAPI Swagger — all 11 tools with live testing |
+| [`/audit-dashboard`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/audit-dashboard) | HMAC audit trail — forensic/compliance view |
+| [`/analytics`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/analytics) | Operational intelligence — override patterns |
+| `/fhir/Patient/{id}` | FHIR R4 patient bundle |
+| `/mcp/sse` | MCP SSE endpoint for Prompt Opinion |
+
+> **Note:** `/analytics` and `/audit-dashboard` data resets on each deploy (in-memory). Populate by running tool calls after deploy.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.12 |
+| Backend | FastAPI + Uvicorn |
+| MCP framework | FastMCP |
+| A2A platform | Prompt Opinion |
+| Classifier LLM | GPT-4o via GitHub Models API |
+| FHIR | Self-hosted R4 compliant endpoints |
+| Audit | HMAC-SHA256 signed audit trail |
+| Deployment | AWS Elastic Beanstalk |
+| Data | Synthetic only — 75 drugs, 5 FHIR patients |
+
+---
+
+## Local development
 
 ### Prerequisites
-
 - Python 3.12+
-- Anthropic API key (Claude Sonnet)
-- MCP server running with hospital formulary data
+- GitHub Models API token (for classifier)
 
 ### Setup
 
 ```bash
-# Clone repository
 git clone https://github.com/nurusyda/Formulari-Bridge.git
 cd Formulari-Bridge
 
-# Install dependencies
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
 pip install -r requirements.txt
 
-# Configure environment
 cp .env.example .env
-# Fill in ANTHROPIC_API_KEY and MCP server config
+# Fill in HMAC_SECRET and O_GITHUB_TOKEN
 
-# Run
-python main.py
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-### Environment Variables
+### Environment variables
 
 | Variable | Description | Required |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Claude API key | ✅ |
-| `MCP_SERVER_URL` | MCP server endpoint for formulary tools | ✅ |
-| `HMAC_SECRET` | Secret for signing audit log entries | ✅ |
-| `HOSPITAL_REGION` | Hospital region identifier | ✅ |
-| `ON_PREMISE_MODE` | Set to `true` for local LLM deployment | ❌ |
-| `AUDIT_LOG_PATH` | Path for HMAC audit log output | ❌ |
+| `HMAC_SECRET` | HMAC signing key for audit trail | ✅ |
+| `O_GITHUB_TOKEN` | GitHub Models API token for classifier | ✅ |
+| `LOW_STOCK_THRESHOLD` | Units below which LOW alert fires (default: 10) | ❌ |
+| `STOCKOUT_WINDOW_HOURS` | Hours ahead for stockout projection (default: 4) | ❌ |
+
+### Quick test
+
+```bash
+# Pharmacy check — PAT-002 penicillin allergy
+curl -X POST http://localhost:8000/tools/getPharmacySummary \
+  -H "Content-Type: application/json" \
+  -d '{"medication": "Amoxicillin", "patient_id": "PAT-002"}'
+
+# Confirm dispensing with override
+curl -X POST http://localhost:8000/tools/confirmDispensing \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "demo-001",
+    "patient_id": "PAT-002",
+    "prescribed_medication": "Amoxicillin 500mg",
+    "chosen_medication": "Azithromycin 250mg",
+    "chosen_option_number": 1,
+    "safety_flags_present": [],
+    "is_override": false,
+    "override_reason": ""
+  }'
+```
 
 ---
 
-## 📁 Project Structure
+## Project structure
 
 ```
 Formulari-Bridge/
-├── main.py              # Agent orchestration + MCP tool integration
-├── rules_engine.py      # Hardcoded contraindication rules (9 rules)
-├── audit.py             # HMAC signing and audit trail
-├── dashboard.py         # Analytics dashboard backend
-├── prompts.py           # Agent system prompts
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment variable template
-└── README.md
+├── main.py              # FastAPI app, 11 MCP tools, rules engine,
+│                        # audit trail, override store, dashboards
+├── mock_db.json         # 75 drugs, 5 synthetic FHIR patients,
+│                        # 3 external pharmacies
+├── prompts.py           # Agent system prompts (reference — prompts
+│                        # live in Prompt Opinion agent configs)
+├── classifier/
+│   ├── classify_intent.py      # GPT-4o via GitHub Models API
+│   ├── generate_training_data.py
+│   └── training_data.json      # 25 few-shot clinical note examples
+├── requirements.txt
+├── Procfile             # AWS EB process config
+├── .ebextensions/       # nginx SSE timeout config
+├── .platform/           # nginx SSE proxy config
+└── CLAUDE.md            # Claude Code context
 ```
 
 ---
 
-## 📊 Comparison
+## Deploying to AWS Elastic Beanstalk
 
-| Feature | Formulari Bridge | Epic/Cerner | Manual Phone Tag |
-|---|---|---|---|
-| Real-time stock at prescription | ✅ | ❌ | ❌ |
-| Ranked safe alternatives | ✅ | Partial | ❌ |
-| Hardcoded safety rules | ✅ (9 rules) | ✅ | Human-dependent |
-| Override gate with reason logging | ✅ | Partial | ❌ |
-| HMAC audit trail | ✅ | ❌ | ❌ |
-| Patient wait time communicated | ✅ | ❌ | ❌ |
-| Analytics dashboard | ✅ | ✅ | ❌ |
-| Open source | ✅ | ❌ | — |
-| Resolution time | ~3 seconds | Hours | Hours |
+```bash
+# Install EB CLI
+pip install awsebcli
 
----
-
-## 🗺️ What's Next
-
-Clinical process automation roadmap:
-
-```
-Privacy First  →  On-premise clinical LLM per hospital region
-                  Patient data never leaves the building
-
-01 Doctor Writes    →  "ear infection, 3 days, no allergies"
-02 Classifier Agent →  Reads and interprets clinical intent
-03 Finds Antibiotics →  Automatically searches available matches
-04 Doctor Confirms  →  Final approval before prescription issued
+# Deploy
+eb deploy
 ```
 
-Near-term:
-- EHR integration (Epic, Cerner FHIR R4 endpoints)
-- Mobile pharmacist interface
-- Predictive stock replenishment from prescription patterns
-- Multi-hospital formulary federation
+Set environment variables in EB console under **Configuration → Environment properties**.
 
 ---
 
-## 📚 References
+## Citation
 
-1. Watanabe JH, McInnis T, Hirsch JD. (2018). [Cost of Prescription Drug-Related Morbidity and Mortality](https://pubmed.ncbi.nlm.nih.gov/29577766/). *Annals of Pharmacotherapy*. DOI: 10.1177/1060028018765159. PMID: 29577766
-2. ONC. (2023). [FHIR R4 Interoperability Standards](https://www.healthit.gov/topic/standards-technology/standards/fhir-fact-sheets)
-3. HHS. (2023). [HIPAA Security Rule — Administrative Safeguards](https://www.hhs.gov/hipaa/for-professionals/security/index.html)
-4. HL7. (2023). [FHIR R4 Specification](https://hl7.org/fhir/R4/)
-
----
-
-## 🤝 Contributing
-
-Pull requests and issues welcome. For significant changes, open an issue first.
-
-Useful contributions:
-- Additional contraindication rules (with citations)
-- EHR system integrations
-- Regional formulary data connectors
-- Accessibility improvements for clinical interfaces
-- Performance benchmarks on real formulary datasets
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
+Watanabe JH, McInnis T, Hirsch JD. Cost of Prescription Drug–Related Morbidity and Mortality. _Annals of Pharmacotherapy_. 2018;52(9):829-837. doi:10.1177/1060028018765159. PMID: 29577766.
 
 ---
 
 <div align="center">
 
-**Built to close the loop between clinical intent and pharmacy reality.**
+Built for **Agents Assemble: Healthcare AI Endgame**
+Hosted by Prompt Opinion × Darena Health | Deadline: May 12, 2026
 
-*"The pharmacist knew the stock. The doctor knew the patient. Neither had the other's information at the right time. Now they do."*
-
-github.com/nurusyda/Formulari-Bridge
+_"The doctor decides. The system never does."_
 
 </div>
