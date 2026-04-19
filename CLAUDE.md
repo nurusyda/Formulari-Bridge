@@ -122,9 +122,9 @@ Data sources: _audit_store + _override_store (both in-memory)
 Shows: prescription check volume, override rate by flag type,
 override reason distribution, most overridden drugs, tool call
 volume, activity by hour (UTC)
-IMPORTANT: data resets on every deploy. Populate by running
-tool calls before taking screenshots for demos or submissions.
-Quick populate via REST:
+Data persists to audit.db (SQLite) — survives server restarts
+and eb deploy. No manual population needed.
+Quick populate via REST (first deploy only):
   POST /tools/getPharmacySummary + POST /tools/confirmDispensing
 Distinct from /audit-dashboard (forensic/compliance tool).
 /analytics is operational intelligence — patterns across sessions.

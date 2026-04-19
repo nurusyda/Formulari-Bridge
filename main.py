@@ -208,52 +208,58 @@ def _db_load_override_store() -> list:
 
 
 def _db_write_audit_entry(job_id: str, entry: dict) -> None:
-    with sqlite3.connect(_DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO audit_entries (job_id, timestamp, agent, tool_called, "
-            "sharp_context_hash, input_hash, output_hash, hmac_signature) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                job_id,
-                entry["timestamp"],
-                entry["agent"],
-                entry["tool_called"],
-                entry["sharp_context_hash"],
-                entry["input_hash"],
-                entry["output_hash"],
-                entry["hmac_signature"],
-            ),
-        )
-        conn.commit()
+    try:
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO audit_entries (job_id, timestamp, agent, tool_called, "
+                "sharp_context_hash, input_hash, output_hash, hmac_signature) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    entry["timestamp"],
+                    entry["agent"],
+                    entry["tool_called"],
+                    entry["sharp_context_hash"],
+                    entry["input_hash"],
+                    entry["output_hash"],
+                    entry["hmac_signature"],
+                ),
+            )
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Failed to persist audit entry to SQLite: %s", e)
 
 
 def _db_write_override(override: dict) -> None:
-    with sqlite3.connect(_DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO override_decisions (confirmation_id, job_id, patient_id, "
-            "prescribed_medication, chosen_medication, override_reason, "
-            "safety_flags_json, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                override.get("confirmation_id", ""),
-                override.get("job_id", ""),
-                override.get("patient_id", ""),
-                override.get("prescribed_medication", ""),
-                override.get("chosen_medication", ""),
-                override.get("override_reason", ""),
-                json.dumps(override.get("safety_flags_at_confirmation", [])),
-                override.get("confirmed_at", ""),
-            ),
-        )
-        # Keep SQLite table under 200 rows — mirror the in-memory cap
-        conn.execute("""
-            DELETE FROM override_decisions
-            WHERE id IN (
-                SELECT id FROM override_decisions
-                ORDER BY id ASC
-                LIMIT MAX(0, (SELECT COUNT(*) FROM override_decisions) - 200)
+    try:
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO override_decisions (confirmation_id, job_id, patient_id, "
+                "prescribed_medication, chosen_medication, override_reason, "
+                "safety_flags_json, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    override.get("confirmation_id", ""),
+                    override.get("job_id", ""),
+                    override.get("patient_id", ""),
+                    override.get("prescribed_medication", ""),
+                    override.get("chosen_medication", ""),
+                    override.get("override_reason", ""),
+                    json.dumps(override.get("safety_flags_at_confirmation", [])),
+                    override.get("confirmed_at", ""),
+                ),
             )
-        """)
-        conn.commit()
+            # Keep SQLite table under 200 rows — mirror the in-memory cap
+            conn.execute("""
+                DELETE FROM override_decisions
+                WHERE id IN (
+                    SELECT id FROM override_decisions
+                    ORDER BY id ASC
+                    LIMIT MAX(0, (SELECT COUNT(*) FROM override_decisions) - 200)
+                )
+            """)
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Failed to persist override to SQLite: %s", e)
 
 
 # Initialise DB and pre-load persisted data into memory
