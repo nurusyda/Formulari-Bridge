@@ -180,7 +180,7 @@ Doxycycline shown as safer. Doctor confirms. System never decides.
 | `/fhir/Patient/{id}` | FHIR R4 patient bundle |
 | `/mcp/sse` | MCP SSE endpoint for Prompt Opinion |
 
-> **Note:** `/analytics` and `/audit-dashboard` data resets on each deploy (in-memory). Populate by running tool calls after deploy.
+> **Note:** `/analytics` and `/audit-dashboard` data persists across restarts via SQLite (`audit.db`).
 
 ---
 
@@ -197,6 +197,7 @@ Doxycycline shown as safer. Doctor confirms. System never decides.
 | Audit | HMAC-SHA256 signed audit trail |
 | Deployment | AWS Elastic Beanstalk |
 | Data | Synthetic only — 75 drugs, 5 FHIR patients |
+| Storage | SQLite (built-in) — audit trail and override persistence |
 
 ---
 
