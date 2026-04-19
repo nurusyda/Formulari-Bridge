@@ -27,3 +27,6 @@ PAT-*.json
 
 # Claude
 .claude/**/*.local.json
+
+# SQLite persistence (instance-local, not committed)
+audit.db

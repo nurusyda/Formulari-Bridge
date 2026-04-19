@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import html
 import json
+import sqlite3
 from collections import Counter
 import logging
 import os
@@ -122,10 +123,146 @@ def resolve_drug_query(*candidates: str) -> str:
             return c.strip()
     return ""
 
+# ─── SQLITE PERSISTENCE ───────────────────────────────────────────────────────
+
+_DB_PATH = os.path.join(os.path.dirname(__file__), "audit.db")
+
+
+def db_init() -> None:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_entries (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id           TEXT NOT NULL,
+                timestamp        TEXT,
+                agent            TEXT,
+                tool_called      TEXT,
+                sharp_context_hash TEXT,
+                input_hash       TEXT,
+                output_hash      TEXT,
+                hmac_signature   TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_job ON audit_entries(job_id)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS override_decisions (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                confirmation_id       TEXT,
+                job_id                TEXT,
+                patient_id            TEXT,
+                prescribed_medication TEXT,
+                chosen_medication     TEXT,
+                override_reason       TEXT,
+                safety_flags_json     TEXT,
+                confirmed_at          TEXT
+            )
+        """)
+        conn.commit()
+
+
+def _db_load_audit_store() -> dict:
+    store: dict[str, list[dict]] = {}
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT job_id, timestamp, agent, tool_called, sharp_context_hash, "
+            "input_hash, output_hash, hmac_signature FROM audit_entries ORDER BY id"
+        ):
+            jid = row["job_id"]
+            if jid not in store:
+                store[jid] = []
+            store[jid].append({
+                "timestamp":          row["timestamp"],
+                "agent":              row["agent"],
+                "tool_called":        row["tool_called"],
+                "sharp_context_hash": row["sharp_context_hash"],
+                "input_hash":         row["input_hash"],
+                "output_hash":        row["output_hash"],
+                "hmac_signature":     row["hmac_signature"],
+            })
+    return store
+
+
+def _db_load_override_store() -> list:
+    overrides: list[dict] = []
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT confirmation_id, job_id, patient_id, prescribed_medication, "
+            "chosen_medication, override_reason, safety_flags_json, confirmed_at "
+            "FROM override_decisions ORDER BY id"
+        ):
+            overrides.append({
+                "confirmation_id":           row["confirmation_id"],
+                "job_id":                    row["job_id"],
+                "patient_id":                row["patient_id"],
+                "prescribed_medication":     row["prescribed_medication"],
+                "chosen_medication":         row["chosen_medication"],
+                "override_reason":           row["override_reason"],
+                "safety_flags_at_confirmation": json.loads(row["safety_flags_json"] or "[]"),
+                "confirmed_at":              row["confirmed_at"],
+            })
+    return overrides
+
+
+def _db_write_audit_entry(job_id: str, entry: dict) -> None:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO audit_entries (job_id, timestamp, agent, tool_called, "
+            "sharp_context_hash, input_hash, output_hash, hmac_signature) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                entry["timestamp"],
+                entry["agent"],
+                entry["tool_called"],
+                entry["sharp_context_hash"],
+                entry["input_hash"],
+                entry["output_hash"],
+                entry["hmac_signature"],
+            ),
+        )
+        conn.commit()
+
+
+def _db_write_override(override: dict) -> None:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO override_decisions (confirmation_id, job_id, patient_id, "
+            "prescribed_medication, chosen_medication, override_reason, "
+            "safety_flags_json, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                override.get("confirmation_id", ""),
+                override.get("job_id", ""),
+                override.get("patient_id", ""),
+                override.get("prescribed_medication", ""),
+                override.get("chosen_medication", ""),
+                override.get("override_reason", ""),
+                json.dumps(override.get("safety_flags_at_confirmation", [])),
+                override.get("confirmed_at", ""),
+            ),
+        )
+        # Keep SQLite table under 200 rows — mirror the in-memory cap
+        conn.execute("""
+            DELETE FROM override_decisions
+            WHERE id IN (
+                SELECT id FROM override_decisions
+                ORDER BY id ASC
+                LIMIT MAX(0, (SELECT COUNT(*) FROM override_decisions) - 200)
+            )
+        """)
+        conn.commit()
+
+
+# Initialise DB and pre-load persisted data into memory
+db_init()
+
 # ─── AUDIT LOG ────────────────────────────────────────────────────────────────
 
-_audit_store: dict[str, list[dict]] = {}
-_override_store: list[dict] = []   # dispensing confirmations with is_override=True
+_audit_store: dict[str, list[dict]] = _db_load_audit_store()
+_override_store: list[dict] = _db_load_override_store()
 
 def _hmac_sign(payload: str) -> str:
     return hmac.new(
@@ -165,6 +302,7 @@ def log_audit(
     if job_id not in _audit_store:
         _audit_store[job_id] = []
     _audit_store[job_id].append(entry)
+    _db_write_audit_entry(job_id, entry)
 
     logger.info(f"AUDIT | job={job_id} agent={agent} tool={tool_called}")
     return entry
@@ -1332,7 +1470,7 @@ async def confirm_dispensing(req: ConfirmDispensingRequest):
     }
 
     if req.is_override:
-        _override_store.append({
+        _override_entry = {
             "confirmation_id": confirmation_id,
             "job_id": req.job_id,
             "patient_id": req.patient_id,
@@ -1341,7 +1479,9 @@ async def confirm_dispensing(req: ConfirmDispensingRequest):
             "override_reason": req.override_reason,
             "safety_flags_at_confirmation": req.safety_flags_present,
             "confirmed_at": confirmed_at,
-        })
+        }
+        _override_store.append(_override_entry)
+        _db_write_override(_override_entry)
         if len(_override_store) > 200:
             _override_store.pop(0)
 
@@ -1459,7 +1599,7 @@ async def audit_dashboard(job_id: str = Query(default="")):
             jobs_html = "<p style='color:#888;text-align:center'>No audit entries yet. Run a tool call first.</p>"
         title_suffix = " — Recent Jobs"
 
-    html = f"""<!DOCTYPE html>
+    page = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1518,7 +1658,7 @@ async def audit_dashboard(job_id: str = Query(default="")):
 </body>
 </html>"""
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=page)
 
 
 # ─── HEALTH & UTILITY ─────────────────────────────────────────────────────────
