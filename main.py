@@ -1,2175 +1,312 @@
-"""
-Seamless Pharmacy Orchestrator — MCP Server
-FastAPI backend exposing 5 MCP tools:
-  1. getHardwareInventory
-  2. getLogisticsEstimate
-  3. getFormularyAlternatives
-  4. flagLowStockReplenishment
-  5. getAuditTrace
-
-Rules engine fires contraindication flags.
-LLM (Agent C) explains those flags — never invents them.
-All tool calls are HMAC-signed and logged.
-
-SYNTHETIC DATA ONLY — no real patient data.
-"""
-
-import asyncio
-import hashlib
-import hmac
-import html
-import json
-from collections import Counter
-import logging
-import os
-import re
-import sys
-import time
-import uuid
-from datetime import datetime, timezone
-from functools import partial
-from pathlib import Path
-from typing import Any
-
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastmcp import FastMCP as _FastMCP
-from pydantic import BaseModel
-
-# Classifier module — add its directory to sys.path so it can import openai
-sys.path.insert(0, str(Path(__file__).parent))
-from classifier.classify_intent import classify_clinical_note
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ─── CONFIG ──────────────────────────────────────────────────────────────────
-
-HMAC_SECRET = os.getenv("HMAC_SECRET", "dev-secret-replace-in-production")
-LOW_STOCK_THRESHOLD = int(os.getenv("LOW_STOCK_THRESHOLD", "10"))
-STOCKOUT_WINDOW_HOURS = int(os.getenv("STOCKOUT_WINDOW_HOURS", "4"))
-
-# ─── LOAD MOCK DATABASE ───────────────────────────────────────────────────────
-
-DB_PATH = os.path.join(os.path.dirname(__file__), "mock_db.json")
-
-def load_db() -> dict:
-    with open(DB_PATH, "r") as f:
-        return json.load(f)
-
-def get_drug(drug_id: str) -> dict | None:
-    db = load_db()
-    for drug in db["drugs"]:
-        if drug["drug_id"].lower() == drug_id.lower():
-            return drug
-    return None
-
-def get_drug_by_name(name: str) -> dict | None:
-    db = load_db()
-    name_lower = name.lower()
-    for drug in db["drugs"]:
-        if (name_lower in drug["medication_name"].lower()
-                or name_lower in drug["drug_id"].lower()):
-            return drug
-    return None
-
-def get_patient(patient_id: str) -> dict | None:
-    db = load_db()
-    for patient in db["patients"]:
-        if patient["patient_id"].lower() == patient_id.lower():
-            return patient
-    return None
-
-def get_dose_variants(drug_id: str) -> dict:
-    """
-    Returns lower_dose and higher_dose variants of a drug if they exist.
-    Uses the dose_variant_of field to find siblings in the database.
-    """
-    db = load_db()
-    lower = None
-    higher = None
-    for drug in db["drugs"]:
-        if drug.get("dose_variant_of") == drug_id:
-            variant_type = drug.get("dose_variant_type", "")
-            entry = {
-                "drug_id": drug["drug_id"],
-                "medication_name": drug["medication_name"],
-                "current_stock": drug["hardware_telemetry"]["current_stock"],
-                "stock_status": (
-                    "OUT_OF_STOCK" if drug["hardware_telemetry"]["current_stock"] == 0
-                    else "LOW" if drug["hardware_telemetry"]["current_stock"] <= LOW_STOCK_THRESHOLD
-                    else "AVAILABLE"
-                ),
-                "estimated_wait_time": drug["logistics"]["estimated_wait_time"],
-                "dose_note": drug.get("dose_note", ""),
-                "requires_prescriber_confirmation": True,
-            }
-            if variant_type == "lower_dose":
-                lower = entry
-            elif variant_type == "higher_dose":
-                higher = entry
-    return {"lower_dose": lower, "higher_dose": higher}
-
-def get_external_pharmacies() -> list:
-    db = load_db()
-    return db.get("external_pharmacies", [])
-
-def resolve_drug_query(*candidates: str) -> str:
-    """Return the first non-empty candidate — used to unify field-name aliases."""
-    for c in candidates:
-        if c and c.strip():
-            return c.strip()
-    return ""
-
-# ─── AUDIT LOG ────────────────────────────────────────────────────────────────
-
-_audit_store: dict[str, list[dict]] = {}
-_override_store: list[dict] = []   # dispensing confirmations with is_override=True
-
-def _hmac_sign(payload: str) -> str:
-    return hmac.new(
-        HMAC_SECRET.encode(),
-        payload.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-def _sha256(data: str) -> str:
-    return hashlib.sha256(data.encode()).hexdigest()
-
-def log_audit(
-    job_id: str,
-    agent: str,
-    tool_called: str,
-    sharp_context_hash: str,
-    input_data: dict,
-    output_data: dict,
-) -> dict:
-    input_hash = _sha256(json.dumps(input_data, sort_keys=True))
-    output_hash = _sha256(json.dumps(output_data, sort_keys=True))
-    timestamp = datetime.now(timezone.utc).isoformat()
-
-    entry_payload = f"{timestamp}|{agent}|{tool_called}|{sharp_context_hash}|{input_hash}|{output_hash}"
-    signature = _hmac_sign(entry_payload)
-
-    entry = {
-        "timestamp": timestamp,
-        "agent": agent,
-        "tool_called": tool_called,
-        "sharp_context_hash": sharp_context_hash,
-        "input_hash": input_hash,
-        "output_hash": output_hash,
-        "hmac_signature": signature,
-    }
-
-    if job_id not in _audit_store:
-        _audit_store[job_id] = []
-    _audit_store[job_id].append(entry)
-
-    logger.info(f"AUDIT | job={job_id} agent={agent} tool={tool_called}")
-    return entry
-
-def verify_audit_chain(entries: list[dict]) -> bool:
-    for entry in entries:
-        payload = (
-            f"{entry['timestamp']}|{entry['agent']}|{entry['tool_called']}|"
-            f"{entry['sharp_context_hash']}|{entry['input_hash']}|{entry['output_hash']}"
-        )
-        expected = _hmac_sign(payload)
-        if not hmac.compare_digest(entry["hmac_signature"], expected):
-            return False
-    return True
-
-# ─── RULES ENGINE ─────────────────────────────────────────────────────────────
-# This is the safety-critical layer. Flags come from here.
-# The LLM (Agent C) explains these flags — it never invents them.
-
-# Drug class fallback map — maps generic class terms to specific formulary drugs.
-# Must stay in sync with mock_db.json drug entries.
-DRUG_CLASS_MAP = {
-    "penicillin": "Amoxicillin 500mg",
-    "penicillin-class": "Amoxicillin 500mg",
-    "penicillin antibiotic": "Amoxicillin 500mg",
-    "penicillin-class antibiotics": "Amoxicillin 500mg",
-    "beta-lactam": "Amoxicillin 500mg",
-    "beta-lactam antibiotic": "Amoxicillin 500mg",
-    "macrolide": "Azithromycin 250mg",
-    "macrolide antibiotic": "Azithromycin 250mg",
-    "macrolide antibiotics": "Azithromycin 250mg",
-    "biguanide": "Metformin 500mg",
-    "biguanide antidiabetic": "Metformin 500mg",
-    "cephalosporin": "Cephalexin 500mg",
-    "first-gen cephalosporin": "Cephalexin 500mg",
-    "anticoagulant": "Warfarin 5mg",
-    "loop diuretic": "Furosemide 40mg",
-    "calcium channel blocker": "Amlodipine 5mg",
-    "nsaid": "Ibuprofen 400mg",
-    "nitrofuran": "Nitrofurantoin 100mg",
-    "fluoroquinolone": "Ciprofloxacin 500mg",
-    "tetracycline": "Doxycycline 100mg",
-    "tetracycline antibiotic": "Doxycycline 100mg",
-    "doxycycline": "Doxycycline 100mg",
-    "nitrofurantoin": "Nitrofurantoin 100mg",
-    "nitrofuran antibiotic": "Nitrofurantoin 100mg",
-    "ciprofloxacin": "Ciprofloxacin 500mg",
-    "fluoroquinolone antibiotic": "Ciprofloxacin 500mg",
-    "quinolone": "Ciprofloxacin 500mg",
-    "furosemide": "Furosemide 40mg",
-    "loop diuretics": "Furosemide 40mg",
-    "warfarin": "Warfarin 5mg",
-    "vitamin k antagonist": "Warfarin 5mg",
-    "anticoagulants": "Warfarin 5mg",
-    "amlodipine": "Amlodipine 5mg",
-    "calcium channel blockers": "Amlodipine 5mg",
-    "lisinopril": "Lisinopril 5mg",
-    "ace inhibitor": "Lisinopril 5mg",
-    "ace inhibitors": "Lisinopril 5mg",
-    "angiotensin converting enzyme inhibitor": "Lisinopril 5mg",
-    "atorvastatin": "Atorvastatin 20mg",
-    "hmg-coa reductase inhibitor": "Atorvastatin 20mg",
-    "hmg-coa reductase inhibitors": "Atorvastatin 20mg",
-    "statin": "Atorvastatin 20mg",
-    "statins": "Atorvastatin 20mg",
-    "angiotensin receptor blocker": "Losartan 50mg",
-    "arb": "Losartan 50mg",
-    "lincosamide": "Clindamycin 300mg",
-    "short-acting beta-agonist": "Salbutamol 100mcg Inhaler",
-    "bronchodilator": "Salbutamol 100mcg Inhaler",
-}
-
-PENICILLIN_CLASS = "Penicillin Antibiotic"
-CEPHALOSPORIN_CLASS = "First-Gen Cephalosporin"
-MACROLIDE_CLASS = "Macrolide Antibiotic"
-NSAID_CLASS = "NSAID Analgesic"
-
-# CYP3A4 inhibitors that interact with macrolides / statins
-CYP3A4_INHIBITORS = ["amiodarone", "clarithromycin", "fluconazole", "ketoconazole"]
-# Warfarin-interacting drug classes
-WARFARIN_INTERACTORS = [MACROLIDE_CLASS, "Quinolone Antibiotic"]
-# Drug classes requiring dose adjustment below CrCl 50
-RENAL_SENSITIVE_CLASSES = [
-    "Penicillin Antibiotic",
-    "First-Gen Cephalosporin",
-    "Biguanide Antidiabetic",
-    "Direct Oral Anticoagulant",
-]
-# Drug classes with QT prolongation risk
-QT_RISK_CLASSES = [MACROLIDE_CLASS, "SSRI Antidepressant"]
-
-
-class ContraindicationFlag:
-    def __init__(
-        self,
-        flag_type: str,
-        severity: str,
-        drug_id: str,
-        detail: str,
-        requires_escalation: bool = False,
-    ):
-        self.flag_type = flag_type
-        self.severity = severity
-        self.drug_id = drug_id
-        self.detail = detail
-        self.requires_escalation = requires_escalation
-
-    def to_dict(self) -> dict:
-        return {
-            "flag_type": self.flag_type,
-            "severity": self.severity,
-            "drug_id": self.drug_id,
-            "detail": self.detail,
-            "requires_escalation": self.requires_escalation,
-        }
-
-
-def run_contraindication_rules(
-    drug: dict,
-    patient: dict,
-) -> list[ContraindicationFlag]:
-    """
-    Hardcoded rule lookups. Returns a list of ContraindicationFlag objects.
-    The LLM receives these structured flags and explains them — it does not
-    generate its own clinical reasoning from scratch.
-    """
-    flags: list[ContraindicationFlag] = []
-    drug_class = drug.get("clinical_class", "")
-    drug_id = drug["drug_id"]
-    allergies = patient.get("allergies", [])
-    active_meds = patient.get("active_medications", [])
-    labs = patient.get("labs", [])
-
-    allergy_classes = [a.get("allergy_class", "") for a in allergies]
-    allergy_substances = [a.get("substance", "").lower() for a in allergies]
-    active_med_names = [m["medication"].lower() for m in active_meds]
-
-    crcl = None
-    qtc = None
-    for lab in labs:
-        if lab["test"] == "Serum Creatinine":
-            crcl = lab.get("derived_CrCl")
-        if lab["test"] == "QTc Interval":
-            qtc = lab.get("value")
-
-    # ── Rule 1: Direct allergy match ─────────────────────────────────────────
-    for allergy in allergies:
-        if allergy.get("allergy_class", "") == drug_class:
-            severity = allergy.get("severity", "Unknown")
-            escalate = severity == "Severe"
-            flags.append(ContraindicationFlag(
-                flag_type="DIRECT_ALLERGY",
-                severity="CRITICAL",
-                drug_id=drug_id,
-                detail=(
-                    f"Patient has documented {severity} allergy to "
-                    f"{allergy['substance']} ({drug_class}). "
-                    f"Reaction: {allergy.get('reaction', 'unknown')}."
-                ),
-                requires_escalation=escalate,
-            ))
-
-    # ── Rule 2: Penicillin → Cephalosporin cross-reactivity ──────────────────
-    if (drug_class == CEPHALOSPORIN_CLASS
-            and PENICILLIN_CLASS in allergy_classes):
-        pen_allergy = next(
-            (a for a in allergies if a.get("allergy_class") == PENICILLIN_CLASS),
-            None,
-        )
-        is_anaphylaxis = (
-            pen_allergy and pen_allergy.get("reaction", "").lower() == "anaphylaxis"
-        )
-        flags.append(ContraindicationFlag(
-            flag_type="CROSS_REACTIVITY",
-            severity="HIGH" if is_anaphylaxis else "MODERATE",
-            drug_id=drug_id,
-            detail=(
-                f"Patient has documented penicillin {'anaphylaxis' if is_anaphylaxis else 'allergy'}. "
-                f"Cross-reactivity risk with cephalosporins is ~1-2%, "
-                f"elevated risk given {'anaphylactic' if is_anaphylaxis else 'allergic'} history. "
-                f"Pharmacist review recommended before dispensing."
-            ),
-            requires_escalation=is_anaphylaxis,
-        ))
-
-    # ── Rule 3: Macrolide + warfarin interaction ──────────────────────────────
-    if (drug_class in WARFARIN_INTERACTORS
-            and any("warfarin" in m for m in active_med_names)):
-        flags.append(ContraindicationFlag(
-            flag_type="DRUG_INTERACTION",
-            severity="HIGH",
-            drug_id=drug_id,
-            detail=(
-                f"{drug['medication_name']} inhibits CYP3A4, which can increase "
-                f"warfarin plasma levels and bleeding risk. "
-                f"Patient is currently on Warfarin. INR monitoring required if prescribed."
-            ),
-            requires_escalation=False,
-        ))
-
-    # ── Rule 4: QT prolongation risk ─────────────────────────────────────────
-    if drug_class in QT_RISK_CLASSES:
-        qt_flag_needed = False
-        qt_detail = f"{drug['medication_name']} carries QT prolongation risk."
-
-        if qtc and qtc > 460:
-            qt_flag_needed = True
-            qt_detail += f" Patient QTc is {qtc}ms (prolonged > 460ms). High risk of additive QT prolongation."
-        elif qtc and qtc > 440:
-            qt_flag_needed = True
-            qt_detail += f" Patient QTc is {qtc}ms (borderline). Monitor closely."
-
-        amiodarone_present = any("amiodarone" in m for m in active_med_names)
-        if amiodarone_present:
-            qt_flag_needed = True
-            qt_detail += " Patient is on amiodarone, which also prolongs QT — additive risk."
-
-        if qt_flag_needed:
-            flags.append(ContraindicationFlag(
-                flag_type="QT_PROLONGATION",
-                severity="HIGH",
-                drug_id=drug_id,
-                detail=qt_detail,
-                requires_escalation=True,
-            ))
-
-    # ── Rule 5: Renal dose adjustment ────────────────────────────────────────
-    if (crcl is not None
-            and crcl < 50
-            and drug_class in RENAL_SENSITIVE_CLASSES):
-        severity = "CRITICAL" if crcl < 30 else "MODERATE"
-        flags.append(ContraindicationFlag(
-            flag_type="RENAL_ADJUSTMENT",
-            severity=severity,
-            drug_id=drug_id,
-            detail=(
-                f"Patient CrCl is {crcl} mL/min. "
-                f"{drug['medication_name']} ({drug_class}) requires dose adjustment "
-                f"or may be contraindicated below CrCl 30. "
-                f"{'Contraindicated — CrCl < 30.' if crcl < 30 else 'Dose reduction required.'}"
-            ),
-            requires_escalation=(crcl < 30),
-        ))
-
-    # ── Rule 6: Metformin CrCl safety check ──────────────────────────────────
-    if (drug_class == "Biguanide Antidiabetic"
-            and crcl is not None
-            and crcl < 45):
-        flags.append(ContraindicationFlag(
-            flag_type="METFORMIN_RENAL_CONTRAINDICATION",
-            severity="CRITICAL" if crcl < 30 else "HIGH",
-            drug_id=drug_id,
-            detail=(
-                f"Metformin is contraindicated when CrCl < 30 and should be used with "
-                f"caution when CrCl 30-45. Patient CrCl: {crcl} mL/min. "
-                f"Risk of lactic acidosis."
-            ),
-            requires_escalation=True,
-        ))
-
-    # ── Rule 7: Therapeutic duplication ──────────────────────────────────────
-    for med in active_meds:
-        med_name = med["medication"].lower()
-        if drug_class in med_name or drug["medication_name"].lower().split()[0] in med_name:
-            flags.append(ContraindicationFlag(
-                flag_type="THERAPEUTIC_DUPLICATION",
-                severity="MODERATE",
-                drug_id=drug_id,
-                detail=(
-                    f"Potential therapeutic duplication: patient is already on "
-                    f"'{med['medication']}'. Confirm prescriber intent."
-                ),
-                requires_escalation=False,
-            ))
-
-    # ── Rule 8: NSAID in renal impairment ────────────────────────────────────
-    if (drug_class == NSAID_CLASS
-            and crcl is not None
-            and crcl < 60):
-        flags.append(ContraindicationFlag(
-            flag_type="NSAID_RENAL_RISK",
-            severity="HIGH" if crcl < 45 else "MODERATE",
-            drug_id=drug_id,
-            detail=(
-                f"NSAIDs reduce renal perfusion and can worsen renal function. "
-                f"Patient CrCl: {crcl} mL/min. "
-                f"Consider paracetamol as renal-safer alternative."
-            ),
-            requires_escalation=(crcl < 45),
-        ))
-
-    # ── Rule 9: BX-coded substitution requires prescriber confirmation ────────
-    if drug.get("te_code") == "BX":
-        flags.append(ContraindicationFlag(
-            flag_type="NON_EQUIVALENT_SUBSTITUTE",
-            severity="MODERATE",
-            drug_id=drug_id,
-            detail=(
-                f"{drug['medication_name']} has TE code BX — not considered "
-                f"therapeutically equivalent to the prescribed drug. "
-                f"Dose conversion or prescriber confirmation required."
-            ),
-            requires_escalation=True,
-        ))
-
-    return flags
-
-
-# ─── STOCK PREDICTION ─────────────────────────────────────────────────────────
-
-def predict_stockout_hours(stock_history: list[int], current_stock: int) -> float | None:
-    """
-    Linear regression on 24h stock history to project hours until stockout.
-    Returns None if stock is adequate or trend is flat/increasing.
-    """
-    if not stock_history or len(stock_history) < 2:
-        return None
-    if current_stock <= 0:
-        return 0.0
-
-    n = len(stock_history)
-    hours_per_point = 24.0 / (n - 1)
-    total_consumed = stock_history[0] - stock_history[-1]
-
-    if total_consumed <= 0:
-        return None
-
-    consumption_rate_per_hour = total_consumed / 24.0
-    if consumption_rate_per_hour <= 0:
-        return None
-
-    hours_remaining = current_stock / consumption_rate_per_hour
-    return round(hours_remaining, 1)
-
-
-# ─── FASTAPI APP ──────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="Seamless Pharmacy Orchestrator — MCP Server",
-    description="MCP tools for outpatient pharmacy drug substitution. Synthetic data only.",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.post("/openapi.json")
-async def openapi_post():
-    """Prompt Opinion calls POST /openapi.json to discover tools."""
-    return app.openapi()
-
-
-# ─── REQUEST / RESPONSE MODELS ────────────────────────────────────────────────
-
-class InventoryRequest(BaseModel):
-    medication_name_or_drug_id: str = ""
-    # aliases — LLM agents call with different field names
-    medication: str = ""
-    drug_name: str = ""
-    drug: str = ""
-    medicationName: str = ""
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class LogisticsRequest(BaseModel):
-    drug_id: str = ""
-    # aliases
-    medication: str = ""
-    medication_name: str = ""
-    drug_name: str = ""
-    medicationName: str = ""
-    patient_id: str = ""  # sometimes sent by mistake — ignored
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class FormularyRequest(BaseModel):
-    drug_id: str = ""
-    # aliases
-    medication: str = ""
-    medication_name: str = ""
-    drug_name: str = ""
-    clinical_class: str = ""
-    patient_id: str = ""
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class ReplenishmentRequest(BaseModel):
-    drug_id: str
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class AuditRequest(BaseModel):
-    job_id: str
-    session_token: str = ""
-
-class FullPharmacyCheckRequest(BaseModel):
-    medication: str
-    patient_id: str
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class ExternalPharmacyRequest(BaseModel):
-    medication_name: str = ""
-    drug_id: str = ""
-    # aliases
-    medication: str = ""
-    drug_name: str = ""
-    medicationName: str = ""
-    patient_id: str = ""  # sometimes sent — ignored
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class ClassifyIntentRequest(BaseModel):
-    clinical_note: str
-    patient_id: str = ""
-    job_id: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-class ConfirmDispensingRequest(BaseModel):
-    job_id: str
-    patient_id: str
-    prescribed_medication: str
-    chosen_medication: str
-    chosen_option_number: int
-    safety_flags_present: list[str] = []
-    is_override: bool = False
-    override_reason: str = ""
-    sharp_context_hash: str = "no-patient-context"
-
-
-# ─── TOOL 1: getHardwareInventory ────────────────────────────────────────────
-
-@app.post("/tools/getHardwareInventory")
-async def get_hardware_inventory(req: InventoryRequest):
-    job_id = req.job_id or str(uuid.uuid4())
-    query = resolve_drug_query(
-        req.medication_name_or_drug_id, req.medication, req.drug_name, req.drug, req.medicationName
-    )
-    if not query:
-        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: medication_name_or_drug_id, medication, drug_name, drug, medicationName")
-
-    drug = get_drug(query) or get_drug_by_name(query)
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {query}")
-
-    telemetry = drug["hardware_telemetry"]
-    result = {
-        "drug_id": drug["drug_id"],
-        "medication_name": drug["medication_name"],
-        "clinical_class": drug["clinical_class"],
-        "te_code": drug.get("te_code", "unknown"),
-        "formulary_tier": drug.get("formulary_tier", 0),
-        "current_stock": telemetry["current_stock"],
-        "machine_location": telemetry["machine_location"],
-        "last_drawer_open": telemetry["last_drawer_open"],
-        "expiration_date": telemetry["expiration_date"],
-        "expiration_trend": telemetry["expiration_trend"],
-        "stock_status": (
-            "OUT_OF_STOCK" if telemetry["current_stock"] == 0
-            else "LOW" if telemetry["current_stock"] <= LOW_STOCK_THRESHOLD
-            else "AVAILABLE"
-        ),
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-B-HardwareSentinel",
-        tool_called="getHardwareInventory",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"query": query},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 2: getLogisticsEstimate ────────────────────────────────────────────
-
-@app.post("/tools/getLogisticsEstimate")
-async def get_logistics_estimate(req: LogisticsRequest):
-    job_id = req.job_id or str(uuid.uuid4())
-    query = resolve_drug_query(
-        req.drug_id, req.medication, req.medication_name, req.drug_name, req.medicationName
-    )
-    if not query:
-        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: drug_id, medication, medication_name, drug_name, medicationName")
-
-    drug = get_drug(query) or get_drug_by_name(query)
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {query}")
-
-    logistics = drug["logistics"]
-    telemetry = drug["hardware_telemetry"]
-
-    stockout_hours = predict_stockout_hours(
-        telemetry.get("stock_history_24h", []),
-        telemetry["current_stock"],
-    )
-
-    result = {
-        "drug_id": drug["drug_id"],
-        "medication_name": drug["medication_name"],
-        "current_stock": telemetry["current_stock"],
-        "preparation_complexity_minutes": logistics["preparation_complexity_minutes"],
-        "current_queue_depth": logistics["current_queue_depth"],
-        "estimated_wait_time": logistics["estimated_wait_time"],
-        "trend_direction": logistics["trend_direction"],
-        "projected_stockout_hours": stockout_hours,
-        "low_stock_alert": (
-            stockout_hours is not None and stockout_hours <= STOCKOUT_WINDOW_HOURS
-        ),
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-B-HardwareSentinel",
-        tool_called="getLogisticsEstimate",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"drug_id": query},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 3: getFormularyAlternatives ────────────────────────────────────────
-
-@app.post("/tools/getFormularyAlternatives")
-async def get_formulary_alternatives(req: FormularyRequest):
-    """
-    Returns formulary alternatives enriched with contraindication flags if
-    a patient_id is provided. Flags come from the rules engine — not the LLM.
-    """
-    job_id = req.job_id or str(uuid.uuid4())
-    query = resolve_drug_query(
-        req.drug_id, req.medication, req.medication_name, req.drug_name
-    )
-    if not query:
-        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: drug_id, medication, medication_name, drug_name")
-
-    drug = get_drug(query) or get_drug_by_name(query)
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {query}")
-
-    patient = get_patient(req.patient_id) if req.patient_id else None
-
-    primary_flags = []
-    if patient:
-        primary_flags = [
-            f.to_dict() for f in run_contraindication_rules(drug, patient)
-        ]
-
-    alternatives = []
-    for alt in drug.get("formulary_alternatives", []):
-        alt_drug = get_drug(alt["drug_id"])
-        if not alt_drug:
-            continue
-
-        alt_flags = []
-        if patient:
-            alt_flags = [
-                f.to_dict() for f in run_contraindication_rules(alt_drug, patient)
-            ]
-
-        alternatives.append({
-            "drug_id": alt["drug_id"],
-            "medication_name": alt["medication_name"],
-            "clinical_class": alt["clinical_class"],
-            "te_code": alt.get("te_code", "unknown"),
-            "formulary_tier": alt_drug.get("formulary_tier", 0),
-            "relative_cost": alt.get("relative_cost", "unknown"),
-            "current_stock": alt.get("current_stock", 0),
-            "estimated_wait_time": alt.get("estimated_wait_time", "unknown"),
-            "therapeutic_notes": alt.get("therapeutic_notes", ""),
-            "contraindication_flags": alt_flags,
-            "safe_to_dispense": len([
-                f for f in alt_flags
-                if f["severity"] in ("CRITICAL",)
-            ]) == 0,
-            "requires_escalation": any(f["requires_escalation"] for f in alt_flags),
-        })
-
-    result = {
-        "prescribed_drug_id": drug["drug_id"],
-        "prescribed_drug_name": drug["medication_name"],
-        "patient_id": req.patient_id or "no-patient-context",
-        "primary_drug_flags": primary_flags,
-        "primary_drug_dispensable": len([
-            f for f in primary_flags if f["severity"] == "CRITICAL"
-        ]) == 0,
-        "alternatives": alternatives,
-        "escalate_to_pharmacist": any(
-            f["requires_escalation"] for f in primary_flags
-        ) or any(
-            alt["requires_escalation"] for alt in alternatives
-        ),
-        "note": (
-            "ALL flags generated by hardcoded rules engine. "
-            "LLM role: explain these flags to the doctor. "
-            "Never add flags not present in this response."
-        ),
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-C-SafetyAuditor",
-        tool_called="getFormularyAlternatives",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={
-            "drug_id": query,
-            "patient_id": req.patient_id or "none",
-        },
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 4: flagLowStockReplenishment ───────────────────────────────────────
-
-@app.post("/tools/flagLowStockReplenishment")
-async def flag_low_stock_replenishment(req: ReplenishmentRequest):
-    job_id = req.job_id or str(uuid.uuid4())
-
-    drug = get_drug(req.drug_id)
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {req.drug_id}")
-
-    telemetry = drug["hardware_telemetry"]
-    logistics = drug["logistics"]
-    current_stock = telemetry["current_stock"]
-    history = telemetry.get("stock_history_24h", [])
-
-    stockout_hours = predict_stockout_hours(history, current_stock)
-
-    alert_triggered = (
-        current_stock <= LOW_STOCK_THRESHOLD
-        or (stockout_hours is not None and stockout_hours <= STOCKOUT_WINDOW_HOURS)
-    )
-
-    avg_daily_consumption = 0
-    if history and len(history) >= 2:
-        avg_daily_consumption = max(0, history[0] - history[-1])
-
-    recommended_reorder = max(avg_daily_consumption * 3, LOW_STOCK_THRESHOLD * 5)
-
-    if current_stock == 0:
-        severity = "critical"
-    elif stockout_hours is not None and stockout_hours <= 2:
-        severity = "critical"
-    elif alert_triggered:
-        severity = "warning"
-    else:
-        severity = "info"
-
-    result = {
-        "drug_id": drug["drug_id"],
-        "medication_name": drug["medication_name"],
-        "current_stock": current_stock,
-        "alert_triggered": alert_triggered,
-        "alert_severity": severity,
-        "projected_stockout_hours": stockout_hours,
-        "recommended_reorder_quantity": int(recommended_reorder),
-        "machine_location": telemetry["machine_location"],
-        "trend_direction": logistics["trend_direction"],
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-B-HardwareSentinel",
-        tool_called="flagLowStockReplenishment",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"drug_id": req.drug_id},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 5: getAuditTrace ────────────────────────────────────────────────────
-
-@app.post("/tools/getAuditTrace")
-async def get_audit_trace(req: AuditRequest):
-    entries = _audit_store.get(req.job_id, [])
-
-    chain_integrity = verify_audit_chain(entries) if entries else True
-
-    result = {
-        "job_id": req.job_id,
-        "entry_count": len(entries),
-        "chain_integrity": chain_integrity,
-        "audit_entries": entries,
-        "integrity_note": (
-            "HMAC-SHA256 signed. Each entry covers: timestamp, agent, tool, "
-            "SHARP context hash, input hash, output hash. "
-            "chain_integrity=false means at least one entry has been tampered with."
-        ),
-    }
-
-    return result
-
-
-# ─── TOOL 6: getExternalPharmacyOptions ──────────────────────────────────────
-
-@app.post("/tools/getExternalPharmacyOptions")
-async def get_external_pharmacy_options(req: ExternalPharmacyRequest):
-    """
-    Returns nearby external pharmacies where the patient can purchase
-    the medication if the hospital formulary cannot fulfill it.
-
-    MOCK DATA — in production this would query a real-time pharmacy
-    availability API (e.g. GoodRx, NearbyPharmacy, or local equivalent)
-    using the patient's location and the drug name.
-
-    The safety flags from getFormularyAlternatives still apply to the
-    drug purchased externally — the molecule is the same.
-    """
-    job_id = req.job_id or str(uuid.uuid4())
-    med_name = resolve_drug_query(
-        req.medication_name, req.medication, req.drug_name, req.medicationName, req.drug_id
-    )
-    if not med_name:
-        raise HTTPException(status_code=400, detail="No medication identifier provided. Supply one of: medication_name, medication, drug_name, medicationName, drug_id")
-
-    # Resolve canonical drug_id — look up by name if only a name was provided
-    if req.drug_id:
-        canonical_drug_id = req.drug_id
-    else:
-        resolved = get_drug_by_name(med_name)
-        canonical_drug_id = resolved["drug_id"] if resolved else "unknown"
-
-    pharmacies = get_external_pharmacies()
-
-    result = {
-        "medication_name": med_name,
-        "drug_id": canonical_drug_id,
-        "external_options": pharmacies,
-        "important_notes": [
-            "Patient pays out-of-pocket at external pharmacies.",
-            "Insurance may not reimburse if hospital formulary has an available equivalent.",
-            "Safety contraindication flags from the formulary check still apply — the molecule is the same drug.",
-            "In production: this tool queries real-time local pharmacy stock APIs.",
-        ],
-        "production_note": (
-            "Mock data — real deployment connects to pharmacy availability API "
-            "using patient location and drug name for live stock and pricing."
-        ),
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-B-HardwareSentinel",
-        tool_called="getExternalPharmacyOptions",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"medication_name": med_name, "drug_id": canonical_drug_id},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 7: getDoseVariants ──────────────────────────────────────────────────
-
-@app.post("/tools/getDoseVariants")
-async def get_dose_variants_tool(req: InventoryRequest):
-    """
-    Returns lower-dose and higher-dose variants of a drug if they exist
-    in the formulary. These are NOT automatic substitutes — they always
-    require prescriber confirmation before dispensing.
-    """
-    job_id = req.job_id or str(uuid.uuid4())
-    query = resolve_drug_query(
-        req.medication_name_or_drug_id, req.medication, req.drug_name, req.drug, req.medicationName
-    )
-    if not query:
-        raise HTTPException(status_code=400, detail="No drug identifier provided. Supply one of: medication_name_or_drug_id, medication, drug_name, drug, medicationName")
-
-    drug = get_drug(query) or get_drug_by_name(query)
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {query}")
-
-    variants = get_dose_variants(drug["drug_id"])
-
-    result = {
-        "prescribed_drug_id": drug["drug_id"],
-        "prescribed_drug_name": drug["medication_name"],
-        "lower_dose_variant": variants["lower_dose"],
-        "higher_dose_variant": variants["higher_dose"],
-        "variants_found": (
-            variants["lower_dose"] is not None
-            or variants["higher_dose"] is not None
-        ),
-        "important_note": (
-            "Dose variants are NOT interchangeable without explicit prescriber confirmation. "
-            "Always present as options requiring doctor approval, never as automatic substitutes."
-        ),
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-B-HardwareSentinel",
-        tool_called="getDoseVariants",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"query": query},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 8: runFullPharmacyCheck ────────────────────────────────────────────
-
-@app.post("/tools/runFullPharmacyCheck")
-async def run_full_pharmacy_check(req: FullPharmacyCheckRequest):
-    """
-    Runs the complete pharmacy workflow for any drug + patient in one call.
-    Steps: inventory → logistics → formulary alternatives → dose variants →
-    external pharmacy options → replenishment (if low stock) → audit trace.
-    """
-    job_id = req.job_id or f"full-{uuid.uuid4().hex[:8]}"
-    sharp_hash = req.sharp_context_hash
-
-    # Resolve drug from name or ID
-    drug = get_drug(req.medication) or get_drug_by_name(req.medication)
-
-    # If direct lookup fails, try resolving by drug class
-    if not drug:
-        med_lower = req.medication.lower().strip()
-        mapped = DRUG_CLASS_MAP.get(med_lower)
-        if mapped:
-            drug = get_drug_by_name(mapped)
-
-    if not drug:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {req.medication}")
-
-    drug_id = drug["drug_id"]
-    medication_name = drug["medication_name"]
-
-    async def _safe(step_name: str, coro):
-        try:
-            return await coro
-        except Exception as exc:
-            logger.warning("runFullPharmacyCheck %s failed: %s", step_name, exc)
-            return {"error": str(exc), "step_failed": step_name}
-
-    # Steps 1–5 — run in parallel (no inter-step dependencies)
-    inventory, logistics, formulary, dose_variants, external = await asyncio.gather(
-        _safe("step_1_inventory", get_hardware_inventory(InventoryRequest(
-            medication_name_or_drug_id=drug_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        ))),
-        _safe("step_2_logistics", get_logistics_estimate(LogisticsRequest(
-            drug_id=drug_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        ))),
-        _safe("step_3_formulary_with_flags", get_formulary_alternatives(FormularyRequest(
-            drug_id=drug_id,
-            patient_id=req.patient_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        ))),
-        _safe("step_4_dose_variants", get_dose_variants_tool(InventoryRequest(
-            medication_name_or_drug_id=drug_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        ))),
-        _safe("step_5_external_pharmacy_options", get_external_pharmacy_options(ExternalPharmacyRequest(
-            medication_name=medication_name,
-            drug_id=drug_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        ))),
-    )
-
-    # Step 6 — replenishment flag (only when stock is low or out)
-    replenishment = None
-    if inventory.get("stock_status") in ("OUT_OF_STOCK", "LOW") or logistics.get("low_stock_alert"):
-        replenishment = await _safe("step_6_replenishment_alert", flag_low_stock_replenishment(ReplenishmentRequest(
-            drug_id=drug_id,
-            job_id=job_id,
-            sharp_context_hash=sharp_hash,
-        )))
-
-    # Step 7 — audit trace
-    audit = await _safe("step_7_audit_trail", get_audit_trace(AuditRequest(job_id=job_id)))
-
-    return {
-        "job_id": job_id,
-        "medication": medication_name,
-        "patient_id": req.patient_id,
-        "step_1_inventory": inventory,
-        "step_2_logistics": logistics,
-        "step_3_formulary_with_flags": formulary,
-        "step_4_dose_variants": dose_variants,
-        "step_5_external_pharmacy_options": external,
-        "step_6_replenishment_alert": replenishment,
-        "step_7_audit_trail": audit,
-    }
-
-
-# ─── TOOL 9: classifyClinicalIntent ──────────────────────────────────────────
-
-@app.post("/tools/classifyClinicalIntent")
-async def classify_clinical_intent(req: ClassifyIntentRequest):
-    """
-    Reads a doctor's free-text clinical note and maps it to a drug class need.
-    Use this BEFORE runFullPharmacyCheck when the doctor writes a clinical note
-    instead of a specific drug name. Returns drug_class_needed to pass to
-    runFullPharmacyCheck.
-
-    Calls GPT-4o via GitHub Models API with the 25 few-shot training examples
-    from classifier/training_data.json. GITHUB_TOKEN must be set in environment.
-    """
-    job_id = req.job_id or str(uuid.uuid4())
-
-    if not req.clinical_note or not req.clinical_note.strip():
-        raise HTTPException(status_code=400, detail="clinical_note must not be empty")
-
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(classify_clinical_note,
-                    clinical_note=req.clinical_note,
-                    patient_id=req.patient_id or None),
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    except Exception as exc:
-        logger.error("classifyClinicalIntent failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Classification error: {exc}")
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-A-ClinicalCopilot",
-        tool_called="classifyClinicalIntent",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={
-            "clinical_note": req.clinical_note[:100] + "..." if len(req.clinical_note) > 100 else req.clinical_note,
-            "patient_id": req.patient_id or "none",
-        },
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 10: getPharmacySummary ─────────────────────────────────────────────
-
-@app.post("/tools/getPharmacySummary")
-async def get_pharmacy_summary(req: FullPharmacyCheckRequest):
-    """
-    Runs runFullPharmacyCheck internally and returns a compact summary:
-    stock status, critical/high flags, ranked safe options, recommendation.
-    Target: under 800 bytes.
-    """
-    job_id = req.job_id or f"full-{uuid.uuid4().hex[:8]}"
-
-    full = await run_full_pharmacy_check(FullPharmacyCheckRequest(
-        medication=req.medication,
-        patient_id=req.patient_id,
-        job_id=job_id,
-        sharp_context_hash=req.sharp_context_hash,
-    ))
-
-    # ── Stock status ──────────────────────────────────────────────────────────
-    inventory = full.get("step_1_inventory", {})
-    stock_status = inventory.get("stock_status", "UNKNOWN")
-
-    # ── Critical flags (CRITICAL or HIGH only) ────────────────────────────────
-    formulary = full.get("step_3_formulary_with_flags", {})
-    primary_flags = formulary.get("primary_drug_flags", [])
-    critical_flags = [
-        f"{f['flag_type']}: {f['detail']}"
-        for f in primary_flags
-        if f.get("severity") in ("CRITICAL", "HIGH")
-    ]
-
-    # ── Build ranked options ──────────────────────────────────────────────────
-    def _wait_minutes(wait_str: str) -> int:
-        m = re.search(r"\d+", str(wait_str))
-        return int(m.group()) if m else 99
-
-    def _alt_sort_key(alt):
-        flags = alt.get("contraindication_flags", [])
-        has_critical = any(f.get("severity") == "CRITICAL" for f in flags)
-        has_high = any(f.get("severity") == "HIGH" for f in flags)
-        is_out = alt.get("current_stock", 0) == 0
-        is_low = 0 < alt.get("current_stock", 0) <= LOW_STOCK_THRESHOLD
-        wait = _wait_minutes(alt.get("estimated_wait_time", "99 min"))
-        return (int(has_critical), int(has_high), int(is_out), int(is_low), wait)
-
-    sorted_alts = sorted(formulary.get("alternatives", []), key=_alt_sort_key)
-
-    options: list[str] = []
-    recommended_idx: int | None = None
-
-    for i, alt in enumerate(sorted_alts, 1):
-        flags = alt.get("contraindication_flags", [])
-        high_flags = [f for f in flags if f["severity"] in ("CRITICAL", "HIGH")]
-        stock = alt.get("current_stock", 0)
-        stock_label = (
-            "OUT_OF_STOCK" if stock == 0
-            else "LOW" if stock <= LOW_STOCK_THRESHOLD
-            else "IN STOCK"
-        )
-        wait = alt.get("estimated_wait_time", "unknown")
-
-        if high_flags:
-            severities = [f["severity"] for f in high_flags]
-            top = "CRITICAL" if "CRITICAL" in severities else "HIGH"
-            flag_type = high_flags[0]["flag_type"]
-            safety = f"{top} {flag_type} flag - Pharmacist review required"
-        else:
-            safety = "No flags"
-
-        suffix = ""
-        if recommended_idx is None and not high_flags and stock > 0:
-            recommended_idx = i
-            suffix = " - RECOMMENDED"
-
-        options.append(
-            f"Option {i}: {alt['medication_name']} - {stock_label} - {wait} - {safety}{suffix}"
-        )
-
-    # Dose variants (always require prescriber confirmation)
-    dose_variants = full.get("step_4_dose_variants", {})
-    for vkey in ("lower_dose_variant", "higher_dose_variant"):
-        variant = dose_variants.get(vkey)
-        if variant:
-            vs = variant.get("current_stock", 0)
-            vs_label = (
-                "OUT_OF_STOCK" if vs == 0
-                else "LOW" if vs <= LOW_STOCK_THRESHOLD
-                else "IN STOCK"
-            )
-            n = len(options) + 1
-            options.append(
-                f"Option {n}: {variant['medication_name']} - {vs_label}"
-                f" - {variant.get('estimated_wait_time', 'unknown')}"
-                f" - Prescriber confirmation required"
-            )
-
-    # External pharmacies
-    ext_list = full.get("step_5_external_pharmacy_options", {}).get("external_options", [])
-    if ext_list:
-        n = len(options) + 1
-        in_stock = [p for p in ext_list if p.get("in_stock", False)]
-        shown = in_stock or ext_list[:3]
-        ext_str = ", ".join(
-            f"{p.get('name', 'Unknown')} ({p.get('walking_minutes', '?')} min walk)"
-            for p in shown
-        )
-        options.append(f"Option {n}: External pharmacies - {ext_str}")
-
-    # ── Option 0: prescribed drug when it carries CRITICAL/HIGH flags ────────
-    # Always surfaced so the doctor can still choose it, but the override flow
-    # is mandatory. Inserted at position 0 so safe alternatives remain 1-based.
-    has_primary_critical = any(f.get("severity") in ("CRITICAL", "HIGH") for f in primary_flags)
-    if has_primary_critical:
-        prescribed_name = full.get("medication", req.medication)
-        prescribed_wait = full.get("step_2_logistics", {}).get("estimated_wait_time", "unknown")
-        flag_types = list(dict.fromkeys(
-            f.get("flag_type", "UNKNOWN") for f in primary_flags
-            if f.get("severity") in ("CRITICAL", "HIGH")
-        ))
-        flag_summary = ", ".join(flag_types)
-        if stock_status == "OUT_OF_STOCK":
-            option_0 = (
-                f"Option 0: {prescribed_name} - OUT OF STOCK - Doctor insists"
-                f" - Patient must collect from external pharmacy (see last option)"
-            )
-        else:
-            option_0 = (
-                f"Option 0: {prescribed_name} - {stock_status} - {prescribed_wait}"
-                f" - \u26a0 OVERRIDE REQUIRED: {flag_summary} - Doctor must confirm override reason"
-            )
-        options.insert(0, option_0)
-
-    # ── Recommendation ────────────────────────────────────────────────────────
-    if recommended_idx is not None:
-        rec_name = sorted_alts[recommended_idx - 1]["medication_name"]
-        recommendation = (
-            f"Option {recommended_idx}: {rec_name} is the safest choice for this patient."
-        )
-    else:
-        recommendation = (
-            "No flag-free in-stock alternative found. Pharmacist review required before dispensing."
-        )
-
-    result = {
-        "medication": full.get("medication", req.medication),
-        "patient_id": req.patient_id,
-        "stock_status": stock_status,
-        "critical_flags": critical_flags,
-        "options": options,
-        "recommendation": recommendation,
-        "escalate_to_pharmacist": formulary.get("escalate_to_pharmacist", False),
-        "job_id": job_id,
-    }
-
-    log_audit(
-        job_id=job_id,
-        agent="Agent-A-ClinicalCopilot",
-        tool_called="getPharmacySummary",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={"medication": req.medication, "patient_id": req.patient_id},
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── TOOL 11: confirmDispensing ──────────────────────────────────────────────
-
-@app.post("/tools/confirmDispensing")
-async def confirm_dispensing(req: ConfirmDispensingRequest):
-    """
-    Logs the doctor's final dispensing decision to the audit trail.
-    If the doctor chose an option with safety flags (is_override=True),
-    the confirmation is also recorded in the override store for dashboard display.
-    """
-    if req.is_override and not req.override_reason.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="override_reason is required when is_override=True"
-        )
-    confirmation_id = f"conf-{uuid.uuid4().hex[:8]}"
-    confirmed_at = datetime.now(timezone.utc).isoformat()
-
-    if req.chosen_option_number == 0 and req.is_override:
-        dispensing_instruction = (
-            "OUT OF STOCK \u2014 Patient directed to external pharmacy. "
-            "Doctor override logged for audit purposes."
-        )
-    elif req.is_override:
-        dispensing_instruction = (
-            f"Dispense {req.chosen_medication} to patient {req.patient_id}. Override confirmed by doctor."
-        )
-    else:
-        dispensing_instruction = (
-            f"Dispense {req.chosen_medication} to patient {req.patient_id}."
-        )
-
-    result = {
-        "confirmation_id": confirmation_id,
-        "job_id": req.job_id,
-        "patient_id": req.patient_id,
-        "prescribed_medication": req.prescribed_medication,
-        "chosen_medication": req.chosen_medication,
-        "is_override": req.is_override,
-        "override_reason": req.override_reason,
-        "safety_flags_at_confirmation": req.safety_flags_present,
-        "confirmed_at": confirmed_at,
-        "audit_logged": True,
-        "dispensing_instruction": dispensing_instruction,
-    }
-
-    if req.is_override:
-        _override_store.append({
-            "confirmation_id": confirmation_id,
-            "job_id": req.job_id,
-            "patient_id": req.patient_id,
-            "prescribed_medication": req.prescribed_medication,
-            "chosen_medication": req.chosen_medication,
-            "override_reason": req.override_reason,
-            "safety_flags_at_confirmation": req.safety_flags_present,
-            "confirmed_at": confirmed_at,
-        })
-        if len(_override_store) > 200:
-            _override_store.pop(0)
-
-    log_audit(
-        job_id=req.job_id,
-        agent="Agent-A-ClinicalCopilot",
-        tool_called="confirmDispensing",
-        sharp_context_hash=req.sharp_context_hash,
-        input_data={
-            "patient_id": req.patient_id,
-            "prescribed_medication": req.prescribed_medication,
-            "chosen_medication": req.chosen_medication,
-            "chosen_option_number": req.chosen_option_number,
-            "is_override": req.is_override,
-        },
-        output_data=result,
-    )
-
-    return result
-
-
-# ─── AUDIT DASHBOARD ─────────────────────────────────────────────────────────
-
-@app.get("/audit-dashboard", response_class=HTMLResponse)
-async def audit_dashboard(job_id: str = Query(default="")):
-    """Visual HTML display of the HMAC audit trail."""
-
-    def _integrity_badge(ok: bool) -> str:
-        if ok:
-            return '<span style="color:#18a868;font-weight:bold">&#10003; true</span>'
-        return '<span style="color:#d9363e;font-weight:bold">&#10007; false</span>'
-
-    def _job_section(jid: str, entries: list) -> str:
-        integrity = verify_audit_chain(entries) if entries else True
-        rows = ""
-        for e in entries:
-            sig_preview = e.get("hmac_signature", "")[:16]
-            rows += (
-                f"<tr>"
-                f"<td>{html.escape(e.get('timestamp',''))}</td>"
-                f"<td>{html.escape(e.get('agent',''))}</td>"
-                f"<td>{html.escape(e.get('tool_called',''))}</td>"
-                f"<td style='font-family:monospace'>{sig_preview}…</td>"
-                f"</tr>"
-            )
-        table = (
-            f"<table>"
-            f"<thead><tr>"
-            f"<th>Timestamp</th><th>Agent</th><th>Tool Called</th><th>HMAC (first 16)</th>"
-            f"</tr></thead>"
-            f"<tbody>{rows}</tbody>"
-            f"</table>"
-        ) if entries else "<p style='color:#888'>No entries for this job.</p>"
-
-        return (
-            f"<div class='job-card'>"
-            f"<div class='job-header'>"
-            f"<span class='job-id'>{jid}</span>"
-            f"<span class='meta'>Entries: <strong>{len(entries)}</strong></span>"
-            f"<span class='meta'>chain_integrity: {_integrity_badge(integrity)}</span>"
-            f"</div>"
-            f"{table}"
-            f"</div>"
-        )
-
-    # ── Override decisions section ────────────────────────────────────────────
-    filtered_overrides = (
-        [o for o in _override_store if o["job_id"] == job_id]
-        if job_id else _override_store[-20:]
-    )
-    if filtered_overrides:
-        override_rows = ""
-        for o in reversed(filtered_overrides):
-            flags_text = html.escape("; ".join(o.get("safety_flags_at_confirmation", [])) or "—")
-            override_rows += (
-                f"<tr>"
-                f"<td>{html.escape(o.get('confirmed_at', ''))}</td>"
-                f"<td style='font-family:monospace'>{html.escape(o.get('job_id', ''))}</td>"
-                f"<td>{html.escape(o.get('patient_id', ''))}</td>"
-                f"<td>{html.escape(o.get('prescribed_medication', ''))}</td>"
-                f"<td><strong>{html.escape(o.get('chosen_medication', ''))}</strong></td>"
-                f"<td style='color:#92400e'>{html.escape(o.get('override_reason', '') or '—')}</td>"
-                f"<td style='font-size:0.8rem;color:#78350f'>{flags_text}</td>"
-                f"</tr>"
-            )
-        overrides_html = (
-            f"<div class='override-card'>"
-            f"<div class='override-header'>"
-            f"<span>&#9888; Override Decisions — Doctor confirmed dispensing despite safety flags</span>"
-            f"<span class='meta'>{len(filtered_overrides)} override(s)</span>"
-            f"</div>"
-            f"<table>"
-            f"<thead><tr>"
-            f"<th>Confirmed At</th><th>Job ID</th><th>Patient</th>"
-            f"<th>Prescribed</th><th>Dispensed</th><th>Override Reason</th><th>Flags Present</th>"
-            f"</tr></thead>"
-            f"<tbody>{override_rows}</tbody>"
-            f"</table>"
-            f"</div>"
-        )
-    else:
-        overrides_html = ""
-
-    # ── Audit trail jobs section ───────────────────────────────────────────────
-    if job_id:
-        entries = _audit_store.get(job_id, [])
-        jobs_html = _job_section(job_id, entries)
-        title_suffix = f" — Job {job_id}"
-    else:
-        # Last 10 jobs by insertion order
-        recent = list(_audit_store.items())[-10:]
-        if recent:
-            jobs_html = "".join(_job_section(jid, ents) for jid, ents in reversed(recent))
-        else:
-            jobs_html = "<p style='color:#888;text-align:center'>No audit entries yet. Run a tool call first.</p>"
-        title_suffix = " — Recent Jobs"
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Audit Dashboard{title_suffix}</title>
-<style>
-  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: system-ui, sans-serif; background: #fff; color: #1a1a1a; padding: 24px; }}
-  h1 {{ color: #1D9E75; font-size: 1.5rem; margin-bottom: 4px; }}
-  .subtitle {{ color: #555; font-size: 0.875rem; margin-bottom: 24px; }}
-  .job-card {{ border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; overflow: hidden; }}
-  .job-header {{ background: #f4faf8; border-bottom: 1px solid #e0e0e0; padding: 12px 16px;
-                 display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }}
-  .job-id {{ font-family: monospace; font-size: 0.9rem; color: #1D9E75; font-weight: bold; flex: 1; }}
-  .meta {{ font-size: 0.85rem; color: #444; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
-  thead tr {{ background: #1D9E75; color: #fff; }}
-  th {{ padding: 8px 12px; text-align: left; font-weight: 600; }}
-  td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
-  tr:last-child td {{ border-bottom: none; }}
-  tbody tr:hover {{ background: #f9fffe; }}
-  p {{ padding: 16px; }}
-  .filter-bar {{ margin-bottom: 20px; display: flex; gap: 8px; align-items: center; }}
-  .filter-bar input {{ border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px;
-                       font-size: 0.875rem; width: 320px; outline: none; }}
-  .filter-bar input:focus {{ border-color: #1D9E75; }}
-  .filter-bar button {{ background: #1D9E75; color: #fff; border: none; border-radius: 4px;
-                        padding: 6px 14px; font-size: 0.875rem; cursor: pointer; }}
-  .filter-bar button:hover {{ background: #178a63; }}
-  .override-card {{ border: 1px solid #F59E0B; border-radius: 8px; margin-bottom: 28px; overflow: hidden; }}
-  .override-header {{ background: #fffbeb; border-bottom: 1px solid #F59E0B; padding: 12px 16px;
-                      display: flex; align-items: center; justify-content: space-between;
-                      font-weight: 600; color: #92400e; font-size: 0.9rem; gap: 16px; }}
-  .override-card table thead tr {{ background: #F59E0B; color: #fff; }}
-  .override-card tbody tr:hover {{ background: #fffdf0; }}
-  .section-label {{ font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em;
-                    text-transform: uppercase; color: #888; margin: 24px 0 10px; }}
-</style>
-</head>
-<body>
-<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-  <h1>Formulari Bridge — Audit Dashboard</h1>
-  <a href="/analytics" style="font-size:0.8rem;color:#1D9E75;text-decoration:none;margin-left:16px">→ Analytics</a>
-</div>
-<p class="subtitle">HMAC-SHA256 signed audit trail &nbsp;|&nbsp; Synthetic data only</p>
-
-<form class="filter-bar" method="get" action="/audit-dashboard">
-  <input type="text" name="job_id" placeholder="Filter by Job ID…" value="{job_id}">
-  <button type="submit">Search</button>
-  {"<a href='/audit-dashboard' style='font-size:0.875rem;color:#1D9E75;text-decoration:none'>Clear</a>" if job_id else ""}
-</form>
-
-{f'<p class="section-label">Override Decisions</p>{overrides_html}' if overrides_html else ""}
-{"<p class='section-label'>Audit Trail</p>" if overrides_html else ""}
-{jobs_html}
-</body>
-</html>"""
-
-    return HTMLResponse(content=html)
-
-
-# ─── HEALTH & UTILITY ─────────────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
-    db = load_db()
-    return {
-        "status": "healthy",
-        "drug_count": len(db["drugs"]),
-        "patient_count": len(db["patients"]),
-        "active_jobs": len(_audit_store),
-        "synthetic_data_only": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-# ─── FHIR R4 ENDPOINTS ────────────────────────────────────────────────────────
-# Self-hosted FHIR R4 compliant endpoints serving synthetic patient bundles.
-# Reliable for demo — no dependency on external public FHIR servers.
-# In production these would be replaced by the hospital's EHR FHIR API.
-# All data is synthetic and labeled as such per FHIR R4 spec.
-#
-# Satisfies hackathon requirement: "it is highly recommended that you use
-# data from a FHIR server in your solution."
-# Cited in Devpost: "Patient FHIR context is served from our own FHIR R4
-# compliant endpoint and propagated through the A2A chain via SHARP."
-
-@app.get("/fhir/metadata")
-async def fhir_capability_statement():
-    """
-    FHIR R4 CapabilityStatement — declares what this server supports.
-    Required by the FHIR spec for any conformant server.
-    """
-    return {
-        "resourceType": "CapabilityStatement",
-        "status": "active",
-        "date": "2026-04-13",
-        "kind": "instance",
-        "fhirVersion": "4.0.1",
-        "format": ["json"],
-        "rest": [
-            {
-                "mode": "server",
-                "resource": [
-                    {
-                        "type": "Patient",
-                        "interaction": [{"code": "read"}, {"code": "search-type"}],
-                        "searchParam": [{"name": "_id", "type": "token"}],
-                    }
-                ],
-            }
-        ],
-        "description": (
-            "Seamless Pharmacy Orchestrator — synthetic FHIR R4 server. "
-            "All patient data is synthetic. No real PHI."
-        ),
-    }
-
-
-@app.get("/fhir/Patient/{patient_id}")
-async def fhir_patient_read(patient_id: str):
-    """
-    FHIR R4 Patient read endpoint.
-    Returns a valid FHIR R4 Patient bundle for the given patient_id.
-    All data is synthetic — labeled with meta.security SUBSETTED tag.
-
-    This endpoint is used by the SHARP extension to propagate patient
-    context through the A2A agent chain.
-    """
-    patient = get_patient(patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail=f"Patient/{patient_id} not found")
-
-    allergies_fhir = [
-        {
-            "resourceType": "AllergyIntolerance",
-            "id": f"allergy-{i}",
-            "meta": {"profile": ["http://hl7.org/fhir/StructureDefinition/AllergyIntolerance"]},
-            "clinicalStatus": {
-                "coding": [{"system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
-                             "code": "active"}]
-            },
-            "verificationStatus": {
-                "coding": [{"system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification",
-                             "code": "confirmed"}]
-            },
-            "criticality": "high" if a.get("severity") == "Severe" else "low",
-            "code": {"text": a["substance"]},
-            "patient": {"reference": f"Patient/{patient_id}"},
-            "reaction": [
-                {
-                    "manifestation": [{"text": a.get("reaction", "unknown")}],
-                    "severity": a.get("severity", "mild").lower(),
-                }
-            ],
-        }
-        for i, a in enumerate(patient.get("allergies", []))
-    ]
-
-    observations_fhir = [
-        {
-            "resourceType": "Observation",
-            "id": f"obs-{i}",
-            "status": "final",
-            "code": {"text": lab["test"]},
-            "subject": {"reference": f"Patient/{patient_id}"},
-            "effectiveDateTime": lab.get("date", "2026-04-01"),
-            "valueQuantity": {
-                "value": lab["value"],
-                "unit": lab["unit"],
-            },
-            "note": [{"text": f"derived_CrCl: {lab['derived_CrCl']}"}]
-            if "derived_CrCl" in lab else [],
-        }
-        for i, lab in enumerate(patient.get("labs", []))
-    ]
-
-    medications_fhir = [
-        {
-            "resourceType": "MedicationStatement",
-            "id": f"med-{i}",
-            "status": "active",
-            "medicationCodeableConcept": {"text": med["medication"]},
-            "subject": {"reference": f"Patient/{patient_id}"},
-            "reasonCode": [{"text": med.get("indication", "")}],
-            "note": [{"text": med.get("note", "")}],
-        }
-        for i, med in enumerate(patient.get("active_medications", []))
-    ]
-
-    bundle = {
-        "resourceType": "Bundle",
-        "id": f"bundle-{patient_id}",
-        "meta": {
-            "lastUpdated": "2026-04-13T00:00:00Z",
-            "security": [
-                {
-                    "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationValue",
-                    "code": "SUBSETTED",
-                    "display": "synthetic data — not real patient information",
-                }
-            ],
-        },
-        "type": "searchset",
-        "total": 1 + len(allergies_fhir) + len(observations_fhir) + len(medications_fhir),
-        "entry": [
-            {
-                "fullUrl": f"Patient/{patient_id}",
-                "resource": {
-                    "resourceType": "Patient",
-                    "id": patient_id,
-                    "meta": {
-                        "profile": ["http://hl7.org/fhir/StructureDefinition/Patient"]
-                    },
-                    "text": {
-                        "status": "generated",
-                        "div": f"<div>SYNTHETIC: {patient.get('name', 'Unknown')}</div>",
-                    },
-                    "name": [{"text": patient.get("name", "Unknown"), "use": "official"}],
-                    "birthDate": patient.get("dob", ""),
-                    "gender": patient.get("gender", "unknown"),
-                    "extension": [
-                        {
-                            "url": "http://formulari-bridge.health/fhir/StructureDefinition/synthetic-data-notice",
-                            "valueString": patient.get("scenario_label", ""),
-                        }
-                    ],
-                },
-            },
-            *[{"fullUrl": f"AllergyIntolerance/{a['id']}", "resource": a} for a in allergies_fhir],
-            *[{"fullUrl": f"Observation/{o['id']}", "resource": o} for o in observations_fhir],
-            *[{"fullUrl": f"MedicationStatement/{m['id']}", "resource": m} for m in medications_fhir],
-        ],
-    }
-
-    return bundle
-
-
-@app.get("/fhir/Patient/{patient_id}/bundle")
-async def fhir_patient_bundle_for_import(patient_id: str):
-    """
-    FHIR R4 Patient bundle formatted for import into Prompt Opinion.
-    Returns type: collection instead of searchset.
-    """
-    # Get the existing bundle
-    bundle = await fhir_patient_read(patient_id)
-
-    # Change type to collection for import compatibility
-    bundle["type"] = "collection"
-
-    # Remove search mode from entries
-    for entry in bundle.get("entry", []):
-        entry.pop("search", None)
-
-    return bundle
-
-
-@app.get("/fhir/Patient")
-async def fhir_patient_search(
-    _id: str | None = None,
-):
-    """
-    FHIR R4 Patient search endpoint.
-    Supports search by _id parameter.
-    Returns a searchset Bundle.
-    """
-    db = load_db()
-    patients = db["patients"]
-
-    if _id:
-        patients = [p for p in patients if p["patient_id"] == _id]
-
-    entries = []
-    for p in patients:
-        entries.append({
-            "fullUrl": f"Patient/{p['patient_id']}",
-            "resource": {
-                "resourceType": "Patient",
-                "id": p["patient_id"],
-                "name": [{"text": p.get("name", "Unknown")}],
-                "birthDate": p.get("dob", ""),
-                "gender": p.get("gender", "unknown"),
-                "extension": [
-                    {"url": "http://formulari-bridge.health/fhir/StructureDefinition/scenario-label", "valueString": p.get("scenario_label", "")},
-                    {"url": "http://formulari-bridge.health/fhir/StructureDefinition/synthetic-data-notice", "valueString": "SYNTHETIC — not real patient data"},
-                ],
-            },
-            "search": {"mode": "match"},
-        })
-
-    return {
-        "resourceType": "Bundle",
-        "type": "searchset",
-        "total": len(entries),
-        "entry": entries,
-    }
-
-@app.get("/drugs")
-async def list_drugs():
-    db = load_db()
-    return [
-        {
-            "drug_id": d["drug_id"],
-            "medication_name": d["medication_name"],
-            "clinical_class": d["clinical_class"],
-            "current_stock": d["hardware_telemetry"]["current_stock"],
-            "stock_status": (
-                "OUT_OF_STOCK" if d["hardware_telemetry"]["current_stock"] == 0
-                else "LOW" if d["hardware_telemetry"]["current_stock"] <= LOW_STOCK_THRESHOLD
-                else "AVAILABLE"
-            ),
-        }
-        for d in db["drugs"]
-    ]
-
-@app.get("/patients")
-async def list_patients():
-    db = load_db()
-    return [
-        {
-            "patient_id": p["patient_id"],
-            "name": p["name"],
-            "scenario_label": p["scenario_label"],
-            "scenario_triggers": p["scenario_triggers"],
-        }
-        for p in db["patients"]
-    ]
-
-@app.get("/demo/full-scenario")
-async def demo_full_scenario():
-    """
-    Demo endpoint: runs the complete Amoxicillin + PAT-002 scenario end to end.
-    Shows the full agent chain in one call — for demo and testing only.
-    """
-    job_id = f"demo-{uuid.uuid4().hex[:8]}"
-    sharp_hash = _sha256("PAT-002-synthetic-fhir-context")
-
-    inv_req = InventoryRequest(
-        medication_name_or_drug_id="rx-amox-500",
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )
-    inventory = await get_hardware_inventory(inv_req)
-
-    log_req = LogisticsRequest(
-        drug_id="rx-amox-500",
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )
-    logistics = await get_logistics_estimate(log_req)
-
-    form_req = FormularyRequest(
-        drug_id="rx-amox-500",
-        patient_id="PAT-002",
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )
-    formulary = await get_formulary_alternatives(form_req)
-
-    dose_req = InventoryRequest(
-        medication_name_or_drug_id="rx-amox-500",
-        job_id=job_id,
-        sharp_context_hash=sharp_hash,
-    )
-    dose_variants = await get_dose_variants_tool(dose_req)
-
-    ext_req = ExternalPharmacyRequest(
-        medication_name="Amoxicillin 500mg Capsule",
-        drug_id="rx-amox-500",
-        job_id=job_id,
-    )
-    external = await get_external_pharmacy_options(ext_req)
-
-    rep_req = ReplenishmentRequest(drug_id="rx-amox-500", job_id=job_id)
-    replenishment = await flag_low_stock_replenishment(rep_req)
-
-    audit_req = AuditRequest(job_id=job_id)
-    audit = await get_audit_trace(audit_req)
-
-    return {
-        "demo_scenario": "Amoxicillin 500mg prescribed for PAT-002 (documented penicillin anaphylaxis)",
-        "job_id": job_id,
-        "step_1_inventory": inventory,
-        "step_2_logistics": logistics,
-        "step_3_formulary_with_flags": formulary,
-        "step_4_dose_variants": dose_variants,
-        "step_5_external_pharmacy_options": external,
-        "step_6_replenishment_alert": replenishment,
-        "step_7_audit_trail": audit,
-    }
-
-
-# ─── ANALYTICS ENDPOINT ───────────────────────────────────────────────────────
-
-@app.get("/analytics", response_class=HTMLResponse)
-async def analytics_dashboard():
-    """
-    Operational intelligence dashboard.
-    Aggregates across _audit_store and _override_store to show:
-    - Total prescription checks
-    - Flag trigger rate by type
-    - Override rate by flag type
-    - Most checked drugs
-    - Busiest time windows
-    - Override reason distribution
-
-    Audience: Chief Pharmacist, hospital administrator.
-    Distinct from /audit-dashboard (forensic/compliance tool).
-    """
-    # ── Aggregate from _audit_store ───────────────────────────────────────────
-    total_jobs = len(_audit_store)
-    total_tool_calls = sum(len(entries) for entries in _audit_store.values())
-
-    prescription_checks = 0
-    hour_counter = Counter()
-    tool_counter = Counter()
-
-    for _, entries in _audit_store.items():
-        for entry in entries:
-            tool = entry.get("tool_called", "")
-            tool_counter[tool] += 1
-            if tool == "getPharmacySummary":
-                prescription_checks += 1
-            ts = entry.get("timestamp", "")
-            if ts:
-                try:
-                    hour = ts[11:13]
-                    hour_counter[hour] += 1
-                except Exception:
-                    pass
-
-    # ── Aggregate from _override_store ────────────────────────────────────────
-    total_overrides = len(_override_store)
-
-    flag_override_counter = Counter()
-    reason_counter = Counter()
-    drug_override_counter = Counter()
-
-    for o in _override_store:
-        reason = o.get("override_reason", "unknown")
-        reason_counter[reason] += 1
-        drug = o.get("prescribed_medication", "unknown")
-        drug_override_counter[drug] += 1
-        for flag in o.get("safety_flags_at_confirmation", []):
-            flag_type = flag.split(":")[0].strip() if ":" in flag else flag
-            flag_override_counter[flag_type] += 1
-
-    # ── Compute override rate ─────────────────────────────────────────────────
-    override_rate = (
-        f"{(total_overrides / prescription_checks * 100):.1f}%"
-        if prescription_checks > 0 else "N/A"
-    )
-
-    # ── Build HTML helpers ────────────────────────────────────────────────────
-    def stat_card(label, value, sublabel=""):
-        sub = f"<div class='stat-sub'>{html.escape(str(sublabel))}</div>" if sublabel else ""
-        return (
-            f"<div class='stat-card'>"
-            f"<div class='stat-value'>{html.escape(str(value))}</div>"
-            f"<div class='stat-label'>{html.escape(label)}</div>"
-            f"{sub}"
-            f"</div>"
-        )
-
-    def table_rows(counter, limit=10, pct_of=None):
-        rows = ""
-        total = sum(counter.values()) or 1
-        for item, count in counter.most_common(limit):
-            pct = (
-                f"{count / pct_of * 100:.1f}%" if pct_of and pct_of > 0
-                else f"{count / total * 100:.1f}%"
-            )
-            rows += (
-                f"<tr>"
-                f"<td>{html.escape(str(item))}</td>"
-                f"<td><strong>{count}</strong></td>"
-                f"<td style='color:#888'>{pct}</td>"
-                f"</tr>"
-            )
-        return rows or "<tr><td colspan='3' style='color:#888;padding:16px'>No data yet.</td></tr>"
-
-    def hour_bar_chart():
-        if not hour_counter:
-            return "<p style='color:#888;padding:16px'>No data yet.</p>"
-        max_val = max(hour_counter.values()) or 1
-        bars = ""
-        for h in sorted(hour_counter.keys()):
-            count = hour_counter[h]
-            pct = int(count / max_val * 100)
-            bars += (
-                f"<div class='bar-row'>"
-                f"<span class='bar-label'>{html.escape(h)}:00</span>"
-                f"<div class='bar-track'>"
-                f"<div class='bar-fill' style='width:{pct}%'></div>"
-                f"</div>"
-                f"<span class='bar-count'>{count}</span>"
-                f"</div>"
-            )
-        return f"<div class='bar-chart'>{bars}</div>"
-
-    # ── Assemble stats row ────────────────────────────────────────────────────
-    stats_html = (
-        stat_card("Prescription Checks", prescription_checks) +
-        stat_card("Override Decisions", total_overrides, f"Override rate: {override_rate}") +
-        stat_card("Total Tool Calls", total_tool_calls) +
-        stat_card("Active Job Sessions", total_jobs)
-    )
-
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Formulari Bridge — Analytics</title>
-<style>
-  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: system-ui, sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 24px; }}
-  h1 {{ color: #1D9E75; font-size: 1.5rem; margin-bottom: 4px; }}
-  .subtitle {{ color: #555; font-size: 0.875rem; margin-bottom: 24px; }}
-  .nav-link {{ font-size: 0.8rem; color: #1D9E75; text-decoration: none; margin-left: 16px; }}
-  .nav-link:hover {{ text-decoration: underline; }}
-  .stats-row {{ display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }}
-  .stat-card {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
-                padding: 16px 20px; flex: 1; min-width: 160px; }}
-  .stat-value {{ font-size: 2rem; font-weight: 700; color: #1D9E75; line-height: 1; }}
-  .stat-label {{ font-size: 0.8rem; color: #666; margin-top: 4px; text-transform: uppercase;
-                 letter-spacing: 0.05em; }}
-  .stat-sub {{ font-size: 0.75rem; color: #F59E0B; margin-top: 4px; font-weight: 600; }}
-  .section {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
-              margin-bottom: 20px; overflow: hidden; }}
-  .section-header {{ background: #f4faf8; border-bottom: 1px solid #e0e0e0;
-                     padding: 12px 16px; font-weight: 600; font-size: 0.9rem; color: #1a1a1a; }}
-  .section-sub {{ font-size: 0.75rem; color: #888; font-weight: 400; margin-left: 8px; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
-  thead tr {{ background: #1D9E75; color: #fff; }}
-  th {{ padding: 8px 12px; text-align: left; font-weight: 600; }}
-  td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
-  tr:last-child td {{ border-bottom: none; }}
-  tbody tr:hover {{ background: #f9fffe; }}
-  .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
-  .bar-chart {{ padding: 12px 16px; }}
-  .bar-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.8rem; }}
-  .bar-label {{ width: 48px; color: #555; text-align: right; flex-shrink: 0; }}
-  .bar-track {{ flex: 1; background: #f0f0f0; border-radius: 3px; height: 16px; overflow: hidden; }}
-  .bar-fill {{ height: 100%; background: #1D9E75; border-radius: 3px;
-               transition: width 0.3s ease; min-width: 2px; }}
-  .bar-count {{ width: 32px; color: #888; font-size: 0.75rem; }}
-  .override-highlight {{ background: #fffbeb; border-color: #F59E0B; }}
-  .override-highlight .section-header {{ background: #fffbeb; border-color: #F59E0B; color: #92400e; }}
-  .override-highlight thead tr {{ background: #F59E0B; }}
-  @media (max-width: 640px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
-</style>
-</head>
-<body>
-<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-  <h1>Formulari Bridge — Operational Intelligence</h1>
-  <a href="/audit-dashboard" class="nav-link">→ Audit Dashboard</a>
-</div>
-<p class="subtitle">
-  Aggregated across all sessions &nbsp;|&nbsp;
-  Synthetic data only &nbsp;|&nbsp;
-  Audience: Chief Pharmacist, Hospital Administrator
+# Formulari Bridge 💊
+
+> **AI-assisted pharmacy orchestration that catches dangerous drug substitutions before they reach the patient.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Powered by Prompt Opinion](https://img.shields.io/badge/Powered%20by-Prompt%20Opinion%20A2A-blue)](https://promptopinion.ai)
+[![FHIR R4](https://img.shields.io/badge/FHIR-R4%20Compliant-orange)](https://hl7.org/fhir/R4/)
+[![Deployed on AWS](https://img.shields.io/badge/Deployed%20on-AWS%20Elastic%20Beanstalk-orange?logo=amazonaws)](https://aws.amazon.com/elasticbeanstalk/)
+
+<p align="center">
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/health">
+    <img src="https://img.shields.io/badge/Live%20Server%20%F0%9F%9F%A2-green?style=for-the-badge" alt="Live Server">
+  </a>
+  &nbsp;
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/audit-dashboard">
+    <img src="https://img.shields.io/badge/Audit%20Dashboard-1D9E75?style=for-the-badge" alt="Audit Dashboard">
+  </a>
+  &nbsp;
+  <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/analytics">
+    <img src="https://img.shields.io/badge/Analytics-F59E0B?style=for-the-badge" alt="Analytics">
+  </a>
 </p>
 
-<div class="stats-row">
-  {stats_html}
+Built for the **Agents Assemble: Healthcare AI Endgame Hackathon** hosted by Prompt Opinion × Darena Health.
+
+---
+
+## The problem
+
+Every day, doctors prescribe medications that are out of stock. The current process is manual and slow — pharmacist calls doctor, doctor thinks of an alternative, pharmacist checks stock, repeat. This loop takes **15–45 minutes** while the patient waits.
+
+Wrong substitution decisions cause ADEs (adverse drug events). A 2018 study estimated the annual cost of prescription drug-related morbidity and mortality in the US at **$528 billion**.
+
+The problem isn't that pharmacists don't know — it's that they don't always have the right patient context at the moment they need it.
+
+---
+
+## What Formulari Bridge does
+
+Formulari Bridge intercepts the substitution decision and makes it safer, faster, and fully auditable.
+
+A doctor types a drug name and patient ID. Within **one second**, the system:
+
+- Checks real-time ADC inventory
+- Runs **9 hardcoded contraindication rules** against the patient's FHIR record
+- Ranks alternatives from safest to least safe for this specific patient
+- Presents a structured decision to the doctor
+- Requires explicit confirmation with an audit trail entry
+- Requires a **stated reason for any override** of a safety flag
+
+**The doctor decides. The system never auto-approves.**
+
+---
+
+## Agent architecture
+
+```
+Doctor message
+      │
+      ▼
+Agent A — Clinical Receptionist (Orchestrator)
+      │
+      ├── getPharmacySummary_mcp ──► Rules Engine ──► Contraindication flags
+      │         └── 7-step parallel workflow (inventory, logistics,
+      │               formulary, dose variants, external pharmacy,
+      │               replenishment, audit)
+      │
+      ├── [consults] Agent 0 — Clinical Classifier
+      │         └── classifyClinicalIntent_mcp (GPT-4o, 25 few-shot examples)
+      │               Only fires when doctor writes a clinical note
+      │               instead of naming a drug
+      │
+      ├── [consults] Agent B — Hardware Sentinel
+      │         └── runFullPharmacyCheck_mcp (full raw data)
+      │
+      └── [consults] Agent C — Clinical Synthesiser
+                └── No tools — explains flags in plain English
+                      Never invents flags. Only explains what rules engine returns.
+      │
+      ▼
+confirmDispensing_mcp ──► HMAC audit trail + override store
+```
+
+---
+
+## Safety model
+
+| Layer | Implementation |
+|---|---|
+| **Contraindication flags** | 9 hardcoded rules — never delegated to LLM |
+| **Doctor always confirms** | No auto-approval anywhere in the system |
+| **Override requires reason** | A/B/C/D reason codes, logged to audit trail |
+| **HMAC-SHA256 audit trail** | Every tool call signed — tamper-evident |
+| **No raw PHI to LLM** | SHARP context extension propagates patient context |
+| **FHIR R4 compliant** | Self-hosted synthetic patient bundles |
+| **Override analytics** | Patterns visible to Chief Pharmacist via `/analytics` |
+
+---
+
+## The 9 contraindication rules
+
+1. Direct allergy match → `CRITICAL`
+2. Penicillin → Cephalosporin cross-reactivity → `HIGH` if anaphylaxis history
+3. Macrolide + warfarin CYP3A4 interaction → `HIGH`
+4. QT prolongation risk (QTc > 460ms or amiodarone present) → `HIGH`
+5. Renal dose adjustment CrCl < 50 → `MODERATE` / `CRITICAL`
+6. Metformin CrCl < 45 contraindication → `HIGH` / `CRITICAL`
+7. Therapeutic duplication → `MODERATE`
+8. NSAID in renal impairment CrCl < 60 → `MODERATE` / `HIGH`
+9. BX-coded non-equivalent substitution → `MODERATE`
+
+---
+
+## Demo scenarios
+
+### Scenario 1 — Allergy detection (PAT-002)
+
+Amoxicillin 500mg prescribed for Maria Santos, documented penicillin anaphylaxis.
+
+```
+FORMULARI BRIDGE — PRESCRIPTION CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Patient ID:  PAT-002
+Prescribed:  Amoxicillin 500mg Capsule
+Status:      ⛔ OUT OF STOCK
+
+SAFETY FLAGS:
+⚠ DIRECT_ALLERGY: Patient has documented Severe allergy to Penicillin.
+  Reaction: Anaphylaxis.
+
+OPTIONS:
+Option 0: Amoxicillin 500mg - OUT OF STOCK - Doctor insists
+          → Patient directed to external pharmacy
+Option 1: Azithromycin 250mg - IN STOCK - 12 min - No flags ✅ RECOMMENDED
+Option 2: Cephalexin 500mg   - IN STOCK - 15 min - HIGH CROSS_REACTIVITY
+Option 5: External pharmacies - MedPlus (4 min walk), Guardian (9 min walk)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Doctor selects Option 2 (flagged) → override menu appears → doctor selects reason B → dispensing confirmed, override logged.
+
+### Scenario 2 — Polypharmacy complexity (PAT-005)
+
+Azithromycin 250mg prescribed for David Mensah, 81. CKD Stage 4, QTc 462ms, on Warfarin + Amiodarone.
+
+Two simultaneous flags fire:
+- **QT_PROLONGATION [HIGH]** — triple additive risk (drug + QTc + amiodarone)
+- **DRUG_INTERACTION [HIGH]** — CYP3A4 inhibition increases warfarin levels
+
+Doxycycline shown as safer. Doctor confirms. System never decides.
+
+---
+
+## 11 MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `getPharmacySummary_mcp` | **PRIMARY** — compact ~800 byte response for Agent A |
+| `runFullPharmacyCheck_mcp` | Full 7-step detailed response |
+| `getHardwareInventory_mcp` | ADC stock level, machine location, expiry |
+| `getLogisticsEstimate_mcp` | Queue depth, wait time, stockout projection |
+| `getFormularyAlternatives_mcp` | Alternatives with contraindication flags |
+| `getDoseVariants_mcp` | Lower/higher dose variants (always need prescriber confirmation) |
+| `flagLowStockReplenishment_mcp` | Reorder recommendation — never automatic |
+| `getExternalPharmacyOptions_mcp` | Nearby external pharmacies with walking distance |
+| `getAuditTrace_mcp` | HMAC-SHA256 tamper-evident audit trail |
+| `classifyClinicalIntent_mcp` | GPT-4o clinical note classifier — Agent 0 only |
+| `confirmDispensing_mcp` | Logs final dispensing decision + override reason |
+
+---
+
+## Live endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| [`/health`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/health) | Server status |
+| [`/docs`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/docs) | FastAPI Swagger — all 11 tools with live testing |
+| [`/audit-dashboard`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/audit-dashboard) | HMAC audit trail — forensic/compliance view |
+| [`/analytics`](http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/analytics) | Operational intelligence — override patterns |
+| `/fhir/Patient/{id}` | FHIR R4 patient bundle |
+| `/mcp/sse` | MCP SSE endpoint for Prompt Opinion |
+
+> **Note:** `/analytics` and `/audit-dashboard` data resets on each deploy (in-memory). Populate by running tool calls after deploy.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.12 |
+| Backend | FastAPI + Uvicorn |
+| MCP framework | FastMCP |
+| A2A platform | Prompt Opinion |
+| Classifier LLM | GPT-4o via GitHub Models API |
+| FHIR | Self-hosted R4 compliant endpoints |
+| Audit | HMAC-SHA256 signed audit trail |
+| Deployment | AWS Elastic Beanstalk |
+| Data | Synthetic only — 75 drugs, 5 FHIR patients |
+
+---
+
+## Local development
+
+### Prerequisites
+- Python 3.12+
+- GitHub Models API token (for classifier)
+
+### Setup
+
+```bash
+git clone https://github.com/nurusyda/Formulari-Bridge.git
+cd Formulari-Bridge
+
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
+pip install -r requirements.txt
+
+cp .env.example .env
+# Fill in HMAC_SECRET and O_GITHUB_TOKEN
+
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### Environment variables
+
+| Variable | Description | Required |
+|---|---|---|
+| `HMAC_SECRET` | HMAC signing key for audit trail | ✅ |
+| `O_GITHUB_TOKEN` | GitHub Models API token for classifier | ✅ |
+| `LOW_STOCK_THRESHOLD` | Units below which LOW alert fires (default: 10) | ❌ |
+| `STOCKOUT_WINDOW_HOURS` | Hours ahead for stockout projection (default: 4) | ❌ |
+
+### Quick test
+
+```bash
+# Pharmacy check — PAT-002 penicillin allergy
+curl -X POST http://localhost:8000/tools/getPharmacySummary \
+  -H "Content-Type: application/json" \
+  -d '{"medication": "Amoxicillin", "patient_id": "PAT-002"}'
+
+# Confirm dispensing with override
+curl -X POST http://localhost:8000/tools/confirmDispensing \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "demo-001",
+    "patient_id": "PAT-002",
+    "prescribed_medication": "Amoxicillin 500mg",
+    "chosen_medication": "Azithromycin 250mg",
+    "chosen_option_number": 1,
+    "safety_flags_present": [],
+    "is_override": false,
+    "override_reason": ""
+  }'
+```
+
+---
+
+## Project structure
+
+```
+Formulari-Bridge/
+├── main.py              # FastAPI app, 11 MCP tools, rules engine,
+│                        # audit trail, override store, dashboards
+├── mock_db.json         # 75 drugs, 5 synthetic FHIR patients,
+│                        # 3 external pharmacies
+├── prompts.py           # Agent system prompts (reference — prompts
+│                        # live in Prompt Opinion agent configs)
+├── classifier/
+│   ├── classify_intent.py      # GPT-4o via GitHub Models API
+│   ├── generate_training_data.py
+│   └── training_data.json      # 25 few-shot clinical note examples
+├── requirements.txt
+├── Procfile             # AWS EB process config
+├── .ebextensions/       # nginx SSE timeout config
+├── .platform/           # nginx SSE proxy config
+└── CLAUDE.md            # Claude Code context
+```
+
+---
+
+## Deploying to AWS Elastic Beanstalk
+
+```bash
+# Install EB CLI
+pip install awsebcli
+
+# Deploy
+eb deploy
+```
+
+Set environment variables in EB console under **Configuration → Environment properties**.
+
+---
+
+## Citation
+
+Watanabe JH, McInnis T, Hirsch JD. Cost of Prescription Drug–Related Morbidity and Mortality. _Annals of Pharmacotherapy_. 2018;52(9):829-837. doi:10.1177/1060028018765159. PMID: 29577766.
+
+---
+
+<div align="center">
+
+Built for **Agents Assemble: Healthcare AI Endgame**
+Hosted by Prompt Opinion × Darena Health | Deadline: May 12, 2026
+
+_"The doctor decides. The system never does."_
+
 </div>
-
-<div class="grid-2">
-  <div class="section override-highlight">
-    <div class="section-header">
-      &#9888; Override Rate by Flag Type
-      <span class="section-sub">Which safety flags get overridden most?</span>
-    </div>
-    <table>
-      <thead><tr><th>Flag Type</th><th>Overrides</th><th>% of Total</th></tr></thead>
-      <tbody>{table_rows(flag_override_counter, pct_of=total_overrides)}</tbody>
-    </table>
-  </div>
-
-  <div class="section override-highlight">
-    <div class="section-header">
-      &#9888; Override Reason Distribution
-      <span class="section-sub">Why doctors override flags</span>
-    </div>
-    <table>
-      <thead><tr><th>Reason</th><th>Count</th><th>% of Overrides</th></tr></thead>
-      <tbody>{table_rows(reason_counter, pct_of=total_overrides)}</tbody>
-    </table>
-  </div>
-</div>
-
-<div class="grid-2">
-  <div class="section">
-    <div class="section-header">
-      Most Overridden Drugs
-      <span class="section-sub">Drugs most frequently dispensed despite safety flags</span>
-    </div>
-    <table>
-      <thead><tr><th>Drug</th><th>Override Count</th><th>% of Overrides</th></tr></thead>
-      <tbody>{table_rows(drug_override_counter, pct_of=total_overrides)}</tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <div class="section-header">
-      Tool Call Volume
-      <span class="section-sub">Which tools fire most</span>
-    </div>
-    <table>
-      <thead><tr><th>Tool</th><th>Calls</th><th>% of Total</th></tr></thead>
-      <tbody>{table_rows(tool_counter)}</tbody>
-    </table>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    Activity by Hour (UTC)
-    <span class="section-sub">Tool call volume — identifies peak prescription windows</span>
-  </div>
-  {hour_bar_chart()}
-</div>
-
-</body>
-</html>"""
-
-    return HTMLResponse(content=page)
-
-
-# ─── MCP PROTOCOL ENDPOINT ────────────────────────────────────────────────────
-# Mounts the FastMCP server at /mcp using Streamable HTTP transport.
-# This is what Prompt Opinion connects to — NOT the /tools/* REST endpoints.
-# The /tools/* endpoints remain for direct REST testing and the /docs UI.
-# Prompt Opinion endpoint to register: https://<your-url>/mcp
-
-_mcp = _FastMCP(
-    name="Formulari Bridge",
-    instructions=(
-        "Formulari Bridge: clinical intent to pharmacy reality. "
-        "7 tools for outpatient pharmacy drug substitution. "
-        "All patient data is synthetic FHIR R4 labeled SUBSETTED. "
-        "Rules engine fires contraindication flags. LLM explains them. "
-        "Doctor always confirms. No auto-approval anywhere."
-    ),
-)
-
-@_mcp.tool(description="Check real-time ADC inventory for a drug. Returns stock level, machine location, expiry trend, stock status. Call this first for any prescription check.")
-async def getHardwareInventory_mcp(medication_name_or_drug_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_hardware_inventory(InventoryRequest(medication_name_or_drug_id=medication_name_or_drug_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Get queue depth, estimated wait time, and projected stockout hours. Returns low_stock_alert flag. Call after getHardwareInventory.")
-async def getLogisticsEstimate_mcp(drug_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_logistics_estimate(LogisticsRequest(drug_id=drug_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Get therapeutic alternatives enriched with contraindication flags from the hardcoded rules engine. Flags are patient-specific if patient_id is provided. LLM must explain flags, never invent new ones.")
-async def getFormularyAlternatives_mcp(drug_id: str, patient_id: str = "", clinical_class: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_formulary_alternatives(FormularyRequest(drug_id=drug_id, patient_id=patient_id, clinical_class=clinical_class, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Get lower and higher dose variants of the same drug. These are NOT automatic substitutes — always require prescriber confirmation.")
-async def getDoseVariants_mcp(medication_name_or_drug_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_dose_variants_tool(InventoryRequest(medication_name_or_drug_id=medication_name_or_drug_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Trigger a reorder recommendation if projected stockout is within 4 hours. Returns alert severity and recommended_reorder_quantity. This is a RECOMMENDATION only, never automatic.")
-async def flagLowStockReplenishment_mcp(drug_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await flag_low_stock_replenishment(ReplenishmentRequest(drug_id=drug_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Get nearby external pharmacies for out-of-hospital purchase. MOCK DATA in hackathon — production uses real pharmacy API. Patient pays out-of-pocket. Safety flags still apply.")
-async def getExternalPharmacyOptions_mcp(medication_name: str, drug_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_external_pharmacy_options(ExternalPharmacyRequest(medication_name=medication_name, drug_id=drug_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Retrieve HMAC-signed tamper-evident audit trail for a job. chain_integrity true means no tampering detected. Call at end of every workflow.")
-async def getAuditTrace_mcp(job_id: str, session_token: str = "") -> dict:
-    return await get_audit_trace(AuditRequest(job_id=job_id, session_token=session_token))
-
-@_mcp.tool(description="Full detailed pharmacy check — returns complete step-by-step data including inventory, logistics, formulary alternatives, dose variants, and audit trail. Use getPharmacySummary_mcp for compact responses. Parameters: medication (drug name or ID), patient_id (e.g. PAT-001).")
-async def runFullPharmacyCheck_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await run_full_pharmacy_check(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="DO NOT CALL DIRECTLY for drug name inputs (e.g. 'Amoxicillin + PAT-002') — use runFullPharmacyCheck_mcp instead. Only call this when the doctor provides a free-text clinical note with no drug name (e.g. 'patient needs antibiotic for UTI'). Reads the note, maps it to a drug_class_needed, then pass that to runFullPharmacyCheck_mcp.")
-async def classifyClinicalIntent_mcp(clinical_note: str, patient_id: str = "", job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await classify_clinical_intent(ClassifyIntentRequest(clinical_note=clinical_note, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="RECOMMENDED — call this for every prescription check. Returns compact pharmacy summary with stock status, safety flags, ranked options, and recommendation. Use runFullPharmacyCheck_mcp if you need full detailed step-by-step data. Parameters: medication (drug name, e.g. Amoxicillin), patient_id (e.g. PAT-001).")
-async def getPharmacySummary_mcp(medication: str, patient_id: str, job_id: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await get_pharmacy_summary(FullPharmacyCheckRequest(medication=medication, patient_id=patient_id, job_id=job_id, sharp_context_hash=sharp_context_hash))
-
-@_mcp.tool(description="Call this after doctor selects an option. Logs the dispensing decision to the audit trail. If doctor chose an option with safety flags, set is_override=true and include the flags in safety_flags_present. Parameters: job_id, patient_id, prescribed_medication, chosen_medication, chosen_option_number, safety_flags_present (list), is_override (bool), override_reason (str).")
-async def confirmDispensing_mcp(job_id: str, patient_id: str, prescribed_medication: str, chosen_medication: str, chosen_option_number: int, safety_flags_present: list[str] | None = None, is_override: bool = False, override_reason: str = "", sharp_context_hash: str = "no-patient-context") -> dict:
-    return await confirm_dispensing(ConfirmDispensingRequest(job_id=job_id, patient_id=patient_id, prescribed_medication=prescribed_medication, chosen_medication=chosen_medication, chosen_option_number=chosen_option_number, safety_flags_present=safety_flags_present or [], is_override=is_override, override_reason=override_reason, sharp_context_hash=sharp_context_hash))
-
-# Declare FHIR context extension capability in the MCP initialize response
-_orig_init_opts = _mcp._mcp_server.create_initialization_options
-def _patched_init_opts(notification_options=None, experimental_capabilities=None, **kwargs):
-    result = _orig_init_opts(
-        notification_options=notification_options,
-        experimental_capabilities=experimental_capabilities,
-        **kwargs
-    )
-    try:
-        caps = result.capabilities
-        if caps is None:
-            return result
-        if not hasattr(caps, 'extensions') or caps.extensions is None:
-            caps.extensions = {}
-        if isinstance(caps.extensions, dict):
-            caps.extensions["ai.promptopinion/fhir-context"] = {}
-    except Exception as e:
-        logger.warning("FHIR cap patch failed: %s", e)
-    return result
-_mcp._mcp_server.create_initialization_options = _patched_init_opts
-
-app.mount("/mcp", _mcp.http_app(transport="sse"))
+```
