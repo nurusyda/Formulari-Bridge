@@ -1,19 +1,3 @@
-"""
-Seamless Pharmacy Orchestrator — MCP Server
-FastAPI backend exposing 5 MCP tools:
-  1. getHardwareInventory
-  2. getLogisticsEstimate
-  3. getFormularyAlternatives
-  4. flagLowStockReplenishment
-  5. getAuditTrace
-
-Rules engine fires contraindication flags.
-LLM (Agent C) explains those flags — never invents them.
-All tool calls are HMAC-signed and logged.
-
-SYNTHETIC DATA ONLY — no real patient data.
-"""
-
 import asyncio
 import hashlib
 import hmac
