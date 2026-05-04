@@ -631,7 +631,7 @@ def predict_stockout_hours(stock_history: list[int], current_stock: int) -> floa
 # ─── FASTAPI APP ──────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Seamless Pharmacy Orchestrator — MCP Server",
+    title="Formulari Bridge — Pharmacy Orchestration MCP Server",
     description="MCP tools for outpatient pharmacy drug substitution. Synthetic data only.",
     version="1.0.0",
 )
