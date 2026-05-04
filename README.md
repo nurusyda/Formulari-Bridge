@@ -19,6 +19,10 @@
   <a href="http://formulari-bridge-prod.eba-embxmfwu.us-east-1.elasticbeanstalk.com/analytics">
     <img src="https://img.shields.io/badge/Analytics-F59E0B?style=for-the-badge" alt="Analytics">
   </a>
+  &nbsp;
+  <a href="https://youtu.be/yeunHP2bUFw">
+    <img src="https://img.shields.io/badge/Demo%20Video-red?style=for-the-badge&logo=youtube" alt="Demo Video">
+  </a>
 </p>
 
 Built for the **Agents Assemble: Healthcare AI Endgame Hackathon** hosted by Prompt Opinion × Darena Health.
@@ -27,11 +31,11 @@ Built for the **Agents Assemble: Healthcare AI Endgame Hackathon** hosted by Pro
 
 ## The problem
 
-Every day, doctors prescribe medications that are out of stock. The current process is manual and slow — pharmacist calls doctor, doctor thinks of an alternative, pharmacist checks stock, repeat. This loop takes **15–45 minutes** while the patient waits.
+When a prescribed drug is out of stock, a pharmacist calls the doctor. The doctor thinks of an alternative. The pharmacist checks stock. They call back. This loop takes **15–45 minutes** while the patient waits — and it happens dozens of times a day in every outpatient pharmacy.
 
-Wrong substitution decisions cause ADEs (adverse drug events). A 2018 study estimated the annual cost of prescription drug-related morbidity and mortality in the US at **$528 billion**.
+The deeper risk is what happens under time pressure: the wrong substitute gets dispensed. A patient with documented penicillin anaphylaxis receives a cephalosporin. A patient on warfarin gets a macrolide that elevates their INR. These are adverse drug events (ADEs) — and they are preventable.
 
-The problem isn't that pharmacists don't know — it's that they don't always have the right patient context at the moment they need it.
+The problem is not that pharmacists don't know. It's that they don't always have the right patient context at the moment they need it.
 
 ---
 
@@ -42,13 +46,27 @@ Formulari Bridge intercepts the substitution decision and makes it safer, faster
 A doctor types a drug name and patient ID. Within **one second**, the system:
 
 - Checks real-time ADC inventory
-- Runs **9 hardcoded contraindication rules** against the patient's FHIR record
+- Runs **9 hardcoded contraindication rules** against the patient's live FHIR record
 - Ranks alternatives from safest to least safe for this specific patient
-- Presents a structured decision to the doctor
+- Presents a structured decision menu to the doctor
 - Requires explicit confirmation with an audit trail entry
 - Requires a **stated reason for any override** of a safety flag
 
 **The doctor decides. The system never auto-approves.**
+
+---
+
+## Why this requires Generative AI — not just a rules engine
+
+A traditional CDSS can fire a contraindication flag. What it cannot do:
+
+1. **Synthesise patient-specific plain English** — translating "CROSS_REACTIVITY flag fired on Cephalexin" into "this patient's documented penicillin anaphylaxis raises cephalosporin risk above the baseline 1-2%, pharmacist review required before dispensing" requires understanding context, not just matching codes.
+
+2. **Map free-text clinical intent to formulary drugs** — when a doctor writes "patient needs antibiotic for UTI, avoid fluoroquinolones", no rule engine maps that to a specific drug class. Agent 0 does, using GPT-4o with 25 clinical note training pairs.
+
+3. **Orchestrate multi-agent A2A workflows** — coordinating four specialised agents (classifier, orchestrator, data sentinel, safety synthesiser) over a live FHIR record in under one second is the A2A protocol doing work that no single rule engine can replicate.
+
+The rules engine fires the flags. The LLM explains them. Neither works without the other.
 
 ---
 
@@ -67,8 +85,7 @@ Agent A — Clinical Receptionist (Orchestrator)
       │
       ├── [consults] Agent 0 — Clinical Classifier
       │         └── classifyClinicalIntent_mcp (GPT-4o, 25 few-shot examples)
-      │               Only fires when doctor writes a clinical note
-      │               instead of naming a drug
+      │               Only fires when doctor writes a free-text clinical note
       │
       ├── [consults] Agent B — Hardware Sentinel
       │         └── runFullPharmacyCheck_mcp (full raw data)
@@ -111,43 +128,21 @@ confirmDispensing_mcp ──► HMAC audit trail + override store
 
 ---
 
-## Demo scenarios
+## Try it yourself — 5 demo scenarios
 
-### Scenario 1 — Allergy detection (PAT-002)
+Access the live agent via the Prompt Opinion platform. Use these patient + drug combinations to see different safety layers in action.
 
-Amoxicillin 500mg prescribed for Maria Santos, documented penicillin anaphylaxis.
+| Patient | Condition | Drug to prescribe | What fires |
+|---|---|---|---|
+| PAT-001 | Healthy — no contraindications | Amoxicillin | Nothing. Clean path, fast dispensing. |
+| PAT-002 | Severe penicillin anaphylaxis | Amoxicillin | CRITICAL allergy + HIGH cross-reactivity on Cephalexin |
+| PAT-003 | CKD Stage 3 + on Warfarin | Azithromycin | DRUG_INTERACTION (macrolide + warfarin CYP3A4) |
+| PAT-004 | Penicillin anaphylaxis + CKD | Ibuprofen | Two simultaneous flags: DIRECT_ALLERGY + NSAID_RENAL_RISK |
+| PAT-005 | Polypharmacy + QTc 462ms + Amiodarone | Azithromycin | QT_PROLONGATION + DRUG_INTERACTION simultaneously |
 
-```
-FORMULARI BRIDGE — PRESCRIPTION CHECK
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Patient ID:  PAT-002
-Prescribed:  Amoxicillin 500mg Capsule
-Status:      ⛔ OUT OF STOCK
+**For PAT-002**: after seeing the results, select Option 2 (Cephalexin — flagged) to trigger the override reason menu. This shows the full safety architecture: flag → override menu → reason required → audit log.
 
-SAFETY FLAGS:
-⚠ DIRECT_ALLERGY: Patient has documented Severe allergy to Penicillin.
-  Reaction: Anaphylaxis.
-
-OPTIONS:
-Option 0: Amoxicillin 500mg - OUT OF STOCK - Doctor insists
-          → Patient directed to external pharmacy
-Option 1: Azithromycin 250mg - IN STOCK - 12 min - No flags ✅ RECOMMENDED
-Option 2: Cephalexin 500mg   - IN STOCK - 15 min - HIGH CROSS_REACTIVITY
-Option 5: External pharmacies - MedPlus (4 min walk), Guardian (9 min walk)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-Doctor selects Option 2 (flagged) → override menu appears → doctor selects reason B → dispensing confirmed, override logged.
-
-### Scenario 2 — Polypharmacy complexity (PAT-005)
-
-Azithromycin 250mg prescribed for David Mensah, 81. CKD Stage 4, QTc 462ms, on Warfarin + Amiodarone.
-
-Two simultaneous flags fire:
-- **QT_PROLONGATION [HIGH]** — triple additive risk (drug + QTc + amiodarone)
-- **DRUG_INTERACTION [HIGH]** — CYP3A4 inhibition increases warfarin levels
-
-Doxycycline shown as safer. Doctor confirms. System never decides.
+**For PAT-005**: this is the hardest case. Triple additive QT risk (drug + prolonged QTc + amiodarone). Doxycycline surfaces as the safe alternative.
 
 ---
 
@@ -180,7 +175,28 @@ Doxycycline shown as safer. Doctor confirms. System never decides.
 | `/fhir/Patient/{id}` | FHIR R4 patient bundle |
 | `/mcp/sse` | MCP SSE endpoint for Prompt Opinion |
 
-> **Note:** `/analytics` and `/audit-dashboard` data persists across restarts via SQLite (`audit.db`).
+---
+
+## FHIR R4 integration
+
+We self-host a FHIR R4 compliant server serving synthetic patient bundles. All patient data carries the FHIR R4 `SUBSETTED` security tag marking it as synthetic.
+
+Patient context propagates through the agent chain via the Prompt Opinion **SHARP extension** — patient ID and FHIR token are injected at session start and flow through every tool call without re-authentication.
+
+Endpoints: `/fhir/metadata` (CapabilityStatement), `/fhir/Patient/{id}` (full Bundle with AllergyIntolerance, Observation, and MedicationStatement resources).
+
+---
+
+## Trust architecture
+
+The hardest problem in clinical AI is not clinical intelligence — it is **trust architecture**. A brilliant black box is not deployable in a hospital. A system a CISO can audit is.
+
+Formulari Bridge builds trust at every layer:
+
+- **Rules engine for safety-critical logic** — contraindication flags come from hardcoded rules, not LLM inference. A compliance officer can read the 9 rules and verify them.
+- **LLM for synthesis only** — Agent C explains flags in plain English. It never invents them. The audit trail records what the rules engine returned and what the LLM communicated.
+- **Every override is a data point** — when a doctor overrides a flag, they state a reason. Four codes (clinical judgment, specialist clearance, context change, system incorrect) create a structured dataset visible to the Chief Pharmacist.
+- **HMAC-SHA256 signed audit trail** — every tool call across the agent chain is signed. `chain_integrity: true` means no entry has been tampered with since it was written.
 
 ---
 
@@ -197,7 +213,7 @@ Doxycycline shown as safer. Doctor confirms. System never decides.
 | Audit | HMAC-SHA256 signed audit trail |
 | Deployment | AWS Elastic Beanstalk |
 | Data | Synthetic only — 75 drugs, 5 FHIR patients |
-| Storage | SQLite (built-in) — audit trail and override persistence |
+| Storage | SQLite — audit trail and override persistence |
 
 ---
 
@@ -214,8 +230,8 @@ git clone https://github.com/nurusyda/Formulari-Bridge.git
 cd Formulari-Bridge
 
 python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
+source venv/bin/activate  # Linux/Mac
+# venv\Scripts\activate   # Windows
 
 pip install -r requirements.txt
 
@@ -237,25 +253,28 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ### Quick test
 
 ```bash
-# Pharmacy check — PAT-002 penicillin allergy
+# PAT-002 — penicillin anaphylaxis scenario
 curl -X POST http://localhost:8000/tools/getPharmacySummary \
   -H "Content-Type: application/json" \
   -d '{"medication": "Amoxicillin", "patient_id": "PAT-002"}'
 
-# Confirm dispensing with override
-curl -X POST http://localhost:8000/tools/confirmDispensing \
+# PAT-005 — polypharmacy + QT risk
+curl -X POST http://localhost:8000/tools/getPharmacySummary \
   -H "Content-Type: application/json" \
-  -d '{
-    "job_id": "demo-001",
-    "patient_id": "PAT-002",
-    "prescribed_medication": "Amoxicillin 500mg",
-    "chosen_medication": "Azithromycin 250mg",
-    "chosen_option_number": 1,
-    "safety_flags_present": [],
-    "is_override": false,
-    "override_reason": ""
-  }'
+  -d '{"medication": "Azithromycin", "patient_id": "PAT-005"}'
 ```
+
+---
+
+## What's next
+
+The production roadmap has three tracks:
+
+**Near-term**: Multi-drug prescription handling (one check covering all drugs in a prescription simultaneously) and patient refusal workflows — both partially scoped.
+
+**Data expansion**: Synthea-generated training data for the classifier agent, expanding coverage beyond the current 25 clinical note examples across 5 patient profiles.
+
+**Long-term architecture**: On-premise clinical LLM per hospital region — patient data never leaves institutional infrastructure. Federated model training shares only model weights across regional networks, not patient data. HIPAA-compliant by design. This addresses the single biggest barrier to hospital AI adoption: data sovereignty.
 
 ---
 
@@ -267,8 +286,7 @@ Formulari-Bridge/
 │                        # audit trail, override store, dashboards
 ├── mock_db.json         # 75 drugs, 5 synthetic FHIR patients,
 │                        # 3 external pharmacies
-├── prompts.py           # Agent system prompts (reference — prompts
-│                        # live in Prompt Opinion agent configs)
+├── prompts.py           # Agent system prompts (reference)
 ├── classifier/
 │   ├── classify_intent.py      # GPT-4o via GitHub Models API
 │   ├── generate_training_data.py
@@ -276,23 +294,8 @@ Formulari-Bridge/
 ├── requirements.txt
 ├── Procfile             # AWS EB process config
 ├── .ebextensions/       # nginx SSE timeout config
-├── .platform/           # nginx SSE proxy config
-└── CLAUDE.md            # Claude Code context
+└── .platform/           # nginx SSE proxy config
 ```
-
----
-
-## Deploying to AWS Elastic Beanstalk
-
-```bash
-# Install EB CLI
-pip install awsebcli
-
-# Deploy
-eb deploy
-```
-
-Set environment variables in EB console under **Configuration → Environment properties**.
 
 ---
 
