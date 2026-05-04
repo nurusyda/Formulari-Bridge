@@ -1,6 +1,6 @@
 # Formulari Bridge 💊
 
-> **AI-assisted pharmacy orchestration that catches dangerous drug substitutions before they reach the patient.**
+> **The 45-minute drug substitution phone loop, replaced with one second.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Powered by Prompt Opinion](https://img.shields.io/badge/Powered%20by-Prompt%20Opinion%20A2A-blue)](https://promptopinion.ai)
@@ -31,42 +31,58 @@ Built for the **Agents Assemble: Healthcare AI Endgame Hackathon** hosted by Pro
 
 ## The problem
 
-When a prescribed drug is out of stock, a pharmacist calls the doctor. The doctor thinks of an alternative. The pharmacist checks stock. They call back. This loop takes **15–45 minutes** while the patient waits — and it happens dozens of times a day in every outpatient pharmacy.
+When a prescribed drug is out of stock, the current process is a phone call. The pharmacist calls the doctor. The doctor suggests an alternative. The pharmacist checks if it's in stock. If not, they call again. This loop takes **15 to 45 minutes** while the patient waits — and it happens dozens of times a day in every outpatient pharmacy.
 
-The deeper risk is what happens under time pressure: the wrong substitute gets dispensed. A patient with documented penicillin anaphylaxis receives a cephalosporin. A patient on warfarin gets a macrolide that elevates their INR. These are adverse drug events (ADEs) — and they are preventable.
+The waste is not just time. It's cognitive load distributed across two professionals who shouldn't have to coordinate manually. The doctor doesn't know what's on the pharmacy shelf. The pharmacist doesn't have full context on the patient's allergies, renal function, and current medications. So they trade phone calls — each one a partial picture — until they converge on something that works.
 
-The problem is not that pharmacists don't know. It's that they don't always have the right patient context at the moment they need it.
+Under that time pressure, the wrong substitute gets dispensed. A patient with documented penicillin anaphylaxis receives a cephalosporin. A patient on warfarin gets a macrolide that elevates their INR. These adverse drug events are preventable — but only if the right information reaches the right person at the right moment.
 
 ---
 
 ## What Formulari Bridge does
 
-Formulari Bridge intercepts the substitution decision and makes it safer, faster, and fully auditable.
+Formulari Bridge replaces the phone loop with a one-second workflow.
 
-A doctor types a drug name and patient ID. Within **one second**, the system:
+The doctor types a drug name and patient ID. The system simultaneously:
 
-- Checks real-time ADC inventory
-- Runs **9 hardcoded contraindication rules** against the patient's live FHIR record
-- Ranks alternatives from safest to least safe for this specific patient
-- Presents a structured decision menu to the doctor
-- Requires explicit confirmation with an audit trail entry
-- Requires a **stated reason for any override** of a safety flag
+- Checks real-time ADC inventory — what's actually on the shelf right now
+- Screens every alternative against the patient's live FHIR record — allergies, labs, active medications
+- Ranks the options from safest to least safe for **this specific patient**
+- Returns a structured menu the doctor can act on immediately
 
-**The doctor decides. The system never auto-approves.**
+The doctor picks a number. The pharmacist dispenses it. No phone calls. No waiting. The substitution decision is made by the doctor — but the legwork, cross-referencing, and safety screening that used to require two people coordinating over the phone is done in parallel by the agent system in under a second.
+
+**The output is a decision, not a question.**
 
 ---
 
-## Why this requires Generative AI — not just a rules engine
+## Why this matters
 
-A traditional CDSS can fire a contraindication flag. What it cannot do:
+A traditional formulary system can tell you what's in stock. A traditional CDSS can tell you what's contraindicated. **Neither closes the loop.** Both still require a human to reconcile inventory with safety, in their head, under time pressure, while the patient waits.
 
-1. **Synthesise patient-specific plain English** — translating "CROSS_REACTIVITY flag fired on Cephalexin" into "this patient's documented penicillin anaphylaxis raises cephalosporin risk above the baseline 1-2%, pharmacist review required before dispensing" requires understanding context, not just matching codes.
+Formulari Bridge closes the loop. The agent system is the third actor in the room — the one that does the cross-referencing so the doctor and pharmacist don't have to.
 
-2. **Map free-text clinical intent to formulary drugs** — when a doctor writes "patient needs antibiotic for UTI, avoid fluoroquinolones", no rule engine maps that to a specific drug class. Agent 0 does, using GPT-4o with 25 clinical note training pairs.
+| Without Formulari Bridge | With Formulari Bridge |
+|---|---|
+| Pharmacist calls doctor when drug is out of stock | Doctor sees stock status before prescribing |
+| Doctor names an alternative without seeing patient labs | Patient context is on screen, automatically |
+| Pharmacist re-checks stock and safety | Stock + safety pre-screened in parallel |
+| 15–45 minutes per substitution | ~1 second per substitution |
+| Wrong substitute risk under time pressure | Ranked menu pre-filtered for this patient |
 
-3. **Orchestrate multi-agent A2A workflows** — coordinating four specialised agents (classifier, orchestrator, data sentinel, safety synthesiser) over a live FHIR record in under one second is the A2A protocol doing work that no single rule engine can replicate.
+---
 
-The rules engine fires the flags. The LLM explains them. Neither works without the other.
+## Why this requires Generative AI
+
+A rules engine alone can fire flags. What it cannot do — and what makes Formulari Bridge work — is three things only an LLM can:
+
+**Patient-specific synthesis in plain English.** Translating "CROSS_REACTIVITY flag, severity HIGH" into "this patient's documented penicillin anaphylaxis raises the cephalosporin cross-reaction risk above the baseline 1–2%" requires understanding context, not matching codes. Agent C does this synthesis. It never invents flags — only explains what the rules engine returned.
+
+**Free-text clinical intent mapping.** When a doctor writes "patient needs antibiotic for UTI, avoid fluoroquinolones", no rule engine maps that to a specific drug class. Agent 0 does, using GPT-4o with 25 clinical note training pairs.
+
+**Multi-agent A2A orchestration.** Four specialised agents — classifier, orchestrator, data sentinel, safety synthesiser — collaborate over a live FHIR record in under a second. That coordination is the A2A protocol doing work no single rule engine or monolithic LLM call replicates.
+
+The rules engine fires the flags. The LLM closes the loop. Neither works without the other.
 
 ---
 
@@ -98,19 +114,24 @@ Agent A — Clinical Receptionist (Orchestrator)
 confirmDispensing_mcp ──► HMAC audit trail + override store
 ```
 
+End-to-end response time: **~629ms** for the data layer, ~1 second to fully presented decision.
+
 ---
 
-## Safety model
+## How it stays deployable in a real hospital
 
-| Layer | Implementation |
-|---|---|
-| **Contraindication flags** | 9 hardcoded rules — never delegated to LLM |
-| **Doctor always confirms** | No auto-approval anywhere in the system |
-| **Override requires reason** | A/B/C/D reason codes, logged to audit trail |
-| **HMAC-SHA256 audit trail** | Every tool call signed — tamper-evident |
-| **No raw PHI to LLM** | SHARP context extension propagates patient context |
-| **FHIR R4 compliant** | Self-hosted synthetic patient bundles |
-| **Override analytics** | Patterns visible to Chief Pharmacist via `/analytics` |
+The time-savings story is the value proposition. The trust architecture is what makes the system shippable past a CISO. We built both, and they're complementary — not competing.
+
+| Layer | What it does | Why it matters |
+|---|---|---|
+| **9 hardcoded contraindication rules** | Safety flags come from rules, not LLM inference | A compliance officer can read and verify them line by line |
+| **Doctor always confirms** | No auto-approval anywhere | Final decision authority stays with the prescriber |
+| **Override requires stated reason** | A/B/C/D codes, structured logging | Every override becomes a data point, not just a logged event |
+| **HMAC-SHA256 audit trail** | Every tool call signed | Tamper-evident chain of custody for regulatory review |
+| **No raw PHI to LLM** | SHARP context propagates hashes | Patient data sovereignty preserved across the agent chain |
+| **FHIR R4 compliant** | Self-hosted endpoint | Drops into any healthcare system already using FHIR |
+
+The override flow specifically: when a doctor sees a flagged option and chooses to dispense it anyway, the system blocks auto-proceed and requires a stated reason. That's a hospital deployment requirement — not a marketing feature. But it produces a useful side effect: aggregated override patterns become operational intelligence for the Chief Pharmacist (which flag types are routinely overridden, which drugs get overridden most, etc.).
 
 ---
 
@@ -130,19 +151,17 @@ confirmDispensing_mcp ──► HMAC audit trail + override store
 
 ## Try it yourself — 5 demo scenarios
 
-Access the live agent via the Prompt Opinion platform. Use these patient + drug combinations to see different safety layers in action.
-
-| Patient | Condition | Drug to prescribe | What fires |
+| Patient | Condition | Drug to prescribe | What happens |
 |---|---|---|---|
-| PAT-001 | Healthy — no contraindications | Amoxicillin | Nothing. Clean path, fast dispensing. |
-| PAT-002 | Severe penicillin anaphylaxis | Amoxicillin | CRITICAL allergy + HIGH cross-reactivity on Cephalexin |
-| PAT-003 | CKD Stage 3 + on Warfarin | Azithromycin | DRUG_INTERACTION (macrolide + warfarin CYP3A4) |
-| PAT-004 | Penicillin anaphylaxis + CKD | Ibuprofen | Two simultaneous flags: DIRECT_ALLERGY + NSAID_RENAL_RISK |
-| PAT-005 | Polypharmacy + QTc 462ms + Amiodarone | Azithromycin | QT_PROLONGATION + DRUG_INTERACTION simultaneously |
+| PAT-001 | Healthy, no contraindications | Amoxicillin | Clean fast path — system confirms, no flags |
+| PAT-002 | Severe penicillin anaphylaxis | Amoxicillin | CRITICAL allergy flag, Azithromycin recommended as safe alternative |
+| PAT-003 | CKD Stage 3 + on Warfarin | Azithromycin | Drug interaction caught (macrolide + warfarin CYP3A4) |
+| PAT-004 | Penicillin anaphylaxis + CKD | Ibuprofen | Two flags fire simultaneously |
+| PAT-005 | Polypharmacy + QTc 462ms + Amiodarone | Azithromycin | Triple QT risk + drug interaction caught — Doxycycline recommended |
 
-**For PAT-002**: after seeing the results, select Option 2 (Cephalexin — flagged) to trigger the override reason menu. This shows the full safety architecture: flag → override menu → reason required → audit log.
+In every case, the doctor sees the answer in one second. No phone call required.
 
-**For PAT-005**: this is the hardest case. Triple additive QT risk (drug + prolonged QTc + amiodarone). Doxycycline surfaces as the safe alternative.
+For PAT-002: try selecting Option 2 (Cephalexin — flagged) after seeing results. This triggers the override flow, which exists for hospital deployment compliance.
 
 ---
 
@@ -150,12 +169,12 @@ Access the live agent via the Prompt Opinion platform. Use these patient + drug 
 
 | Tool | Purpose |
 |---|---|
-| `getPharmacySummary_mcp` | **PRIMARY** — compact ~800 byte response for Agent A |
+| `getPharmacySummary_mcp` | **PRIMARY** — compact decision-ready response for Agent A |
 | `runFullPharmacyCheck_mcp` | Full 7-step detailed response |
 | `getHardwareInventory_mcp` | ADC stock level, machine location, expiry |
 | `getLogisticsEstimate_mcp` | Queue depth, wait time, stockout projection |
 | `getFormularyAlternatives_mcp` | Alternatives with contraindication flags |
-| `getDoseVariants_mcp` | Lower/higher dose variants (always need prescriber confirmation) |
+| `getDoseVariants_mcp` | Lower/higher dose variants (require prescriber confirmation) |
 | `flagLowStockReplenishment_mcp` | Reorder recommendation — never automatic |
 | `getExternalPharmacyOptions_mcp` | Nearby external pharmacies with walking distance |
 | `getAuditTrace_mcp` | HMAC-SHA256 tamper-evident audit trail |
@@ -179,24 +198,11 @@ Access the live agent via the Prompt Opinion platform. Use these patient + drug 
 
 ## FHIR R4 integration
 
-We self-host a FHIR R4 compliant server serving synthetic patient bundles. All patient data carries the FHIR R4 `SUBSETTED` security tag marking it as synthetic.
-
-Patient context propagates through the agent chain via the Prompt Opinion **SHARP extension** — patient ID and FHIR token are injected at session start and flow through every tool call without re-authentication.
+We self-host a FHIR R4 compliant server serving synthetic patient bundles. Patient context propagates through the agent chain via the Prompt Opinion **SHARP extension** — patient ID and FHIR token injected at session start, flowing through every tool call without re-authentication.
 
 Endpoints: `/fhir/metadata` (CapabilityStatement), `/fhir/Patient/{id}` (full Bundle with AllergyIntolerance, Observation, and MedicationStatement resources).
 
----
-
-## Trust architecture
-
-The hardest problem in clinical AI is not clinical intelligence — it is **trust architecture**. A brilliant black box is not deployable in a hospital. A system a CISO can audit is.
-
-Formulari Bridge builds trust at every layer:
-
-- **Rules engine for safety-critical logic** — contraindication flags come from hardcoded rules, not LLM inference. A compliance officer can read the 9 rules and verify them.
-- **LLM for synthesis only** — Agent C explains flags in plain English. It never invents them. The audit trail records what the rules engine returned and what the LLM communicated.
-- **Every override is a data point** — when a doctor overrides a flag, they state a reason. Four codes (clinical judgment, specialist clearance, context change, system incorrect) create a structured dataset visible to the Chief Pharmacist.
-- **HMAC-SHA256 signed audit trail** — every tool call across the agent chain is signed. `chain_integrity: true` means no entry has been tampered with since it was written.
+All data carries the FHIR R4 `SUBSETTED` security tag marking it as synthetic.
 
 ---
 
@@ -268,11 +274,9 @@ curl -X POST http://localhost:8000/tools/getPharmacySummary \
 
 ## What's next
 
-The production roadmap has three tracks:
-
 **Near-term**: Multi-drug prescription handling (one check covering all drugs in a prescription simultaneously) and patient refusal workflows — both partially scoped.
 
-**Data expansion**: Synthea-generated training data for the classifier agent, expanding coverage beyond the current 25 clinical note examples across 5 patient profiles.
+**Data expansion**: Synthea-generated training data for the classifier agent, expanding coverage beyond the current 25 clinical note examples.
 
 **Long-term architecture**: On-premise clinical LLM per hospital region — patient data never leaves institutional infrastructure. Federated model training shares only model weights across regional networks, not patient data. HIPAA-compliant by design. This addresses the single biggest barrier to hospital AI adoption: data sovereignty.
 
@@ -310,6 +314,6 @@ Watanabe JH, McInnis T, Hirsch JD. Cost of Prescription Drug–Related Morbidity
 Built for **Agents Assemble: Healthcare AI Endgame**
 Hosted by Prompt Opinion × Darena Health | Deadline: May 12, 2026
 
-_"The doctor decides. The system never does."_
+_"From 45 minutes to 1 second. The doctor decides — the AI does the legwork."_
 
 </div>
