@@ -109,7 +109,12 @@ def resolve_drug_query(*candidates: str) -> str:
 
 # ─── SQLITE PERSISTENCE ───────────────────────────────────────────────────────
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "audit.db")
+_app_dir = os.path.dirname(__file__)
+_DB_PATH = (
+    os.path.join(_app_dir, "audit.db")
+    if os.access(_app_dir, os.W_OK)
+    else "/tmp/audit.db"
+)
 
 
 def db_init() -> None:
