@@ -135,6 +135,30 @@ The override flow specifically: when a doctor sees a flagged option and chooses 
 
 ---
 
+## Security Notes
+
+**2026-08-12 — HMAC signing key rotated and removed from source control.**
+`.ebextensions/01_packages.config` (committed 2026-04-13) hardcoded the
+`HMAC_SECRET` value used to sign the audit trail described above — the exact
+key backing the "tamper-evident chain of custody" property in the table
+above, in a public repo for roughly four months. Remediation:
+
+- The key has been rotated. The value that was committed is treated as
+  compromised and is no longer in production use.
+- `HMAC_SECRET` is no longer present anywhere in this repository. It is set
+  as an Elastic Beanstalk environment property (Configuration → Updates,
+  monitoring, and logging → Environment properties), consistent with this
+  project's own rule (`CLAUDE.md`: "HMAC_SECRET must come from environment
+  variable — never hardcode") — which this file had violated.
+- Git history was not rewritten; the old key is retired rather than hidden,
+  and rotation is the actual remediation.
+- Practical consequence of rotation: audit entries signed before the key
+  change verify against the old key, not the new one. This is expected —
+  the chain-of-custody property is per-signing-key, and this note marks
+  where the key boundary is.
+
+---
+
 ## The 9 contraindication rules
 
 1. Direct allergy match → `CRITICAL`
